@@ -125,7 +125,7 @@ clean_gate_exec() {
     local tc_lines
     # shellcheck disable=SC2016
     tc_lines="$(
-      env -i PATH="${PATH:-/usr/bin:/bin}" HOME="${HOME:-/tmp}" /bin/bash -c '
+      /bin/bash -c '
         set -euo pipefail
         # shellcheck disable=SC1090
         source "$1"

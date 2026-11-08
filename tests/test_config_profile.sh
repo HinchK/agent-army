@@ -98,18 +98,32 @@ if TEST_CMD="true" profile_ensure "$REPO1" >/dev/null 2>&1; then
   exit 1
 fi
 
-TEST_CMD="pytest -q" TOOLCHAIN_VARS="FOO_TOOL=bar_val" profile_ensure "$REPO1"
+TEST_CMD="pytest -q" TOOLCHAIN_VARS="FOO_TOOL INLINE_TOOL=inline_val" profile_ensure "$REPO1"
 if [ ! -f "$REPO1/.agent-army/profile.env" ]; then
   echo "FAIL: profile_ensure did not write .agent-army/profile.env" >&2
+  exit 1
+fi
+
+REPO2="$TMP_ROOT/repo2"
+init_test_repo "$REPO2"
+echo '[package]' > "$REPO2/Cargo.toml"
+profile_ensure "$REPO2"
+REPO2_CMD="$(
+  # shellcheck disable=SC1091
+  source "$REPO2/.agent-army/profile.env"
+  printf '%s' "$TEST_CMD"
+)"
+if [ "$REPO2_CMD" != "cargo test" ]; then
+  echo "FAIL: sequential profile_ensure on second repo was shadowed: expected 'cargo test', got '$REPO2_CMD'" >&2
   exit 1
 fi
 
 echo "=== Test 4: clean_gate_exec runs with CI=true and strips HERDR_*, REPO_DIR, STATE_DIR ==="
 PROFILE_FILE="$REPO1/.agent-army/profile.env"
 # shellcheck disable=SC2016
-HERDR_PANE_ID="w1:p1" HERDR_ENV="1" REPO_DIR="/bad/repo" STATE_DIR="/bad/state" CI="false" \
+FOO_TOOL="bar_val" HERDR_PANE_ID="w1:p1" HERDR_ENV="1" REPO_DIR="/bad/repo" STATE_DIR="/bad/state" CI="false" \
   clean_gate_exec "$REPO1" "$PROFILE_FILE" 10 \
-  'test "$CI" = "true" && test -z "${HERDR_PANE_ID:-}" && test -z "${HERDR_ENV:-}" && test -z "${REPO_DIR:-}" && test -z "${STATE_DIR:-}" && test "${FOO_TOOL:-}" = "bar_val" && test -d "${TMPDIR:-}"'
+  'test "$CI" = "true" && test -z "${HERDR_PANE_ID:-}" && test -z "${HERDR_ENV:-}" && test -z "${REPO_DIR:-}" && test -z "${STATE_DIR:-}" && test "${FOO_TOOL:-}" = "bar_val" && test "${INLINE_TOOL:-}" = "inline_val" && test -d "${TMPDIR:-}"'
 
 echo "=== Test 5: config_dump exports expected variables ==="
 ARMY_NAME=""

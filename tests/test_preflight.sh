@@ -92,6 +92,27 @@ if preflight_check "$REPO_DIR" "$REPO_DIR/army.config.toml" >/dev/null 2>&1; the
 fi
 git -C "$REPO_DIR" checkout -q main
 
+sed -E 's/^harness = "pi"/harness = "unsupported_harness"/' "$REPO_DIR/army.config.toml" > "$TMP_ROOT/bad_harness.toml"
+if preflight_check "$REPO_DIR" "$TMP_ROOT/bad_harness.toml" >/dev/null 2>&1; then
+  echo "FAIL: preflight_check should fail when COMMANDER_HARNESS is unsupported" >&2
+  exit 1
+fi
+
+rm -f "$MOCK_BIN/pi"
+for sys_dep in git jq gh; do
+  ln -sf "$(command -v "$sys_dep")" "$MOCK_BIN/$sys_dep"
+done
+ERR_OUT="$(PATH="$MOCK_BIN:/usr/bin:/bin" preflight_check "$REPO_DIR" "$REPO_DIR/army.config.toml" 2>&1 || true)"
+if ! printf '%s' "$ERR_OUT" | grep -q "configured commander harness 'pi' not found on PATH"; then
+  echo "FAIL: expected missing harness error for 'pi', got: $ERR_OUT" >&2
+  exit 1
+fi
+cat > "$MOCK_BIN/pi" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+chmod +x "$MOCK_BIN/pi"
+
 echo "=== Test 3: telemetry.py log appends valid JSONL with no stdout/ANSI output ==="
 resolve_python
 TELEM_OUT="$("$PYTHON_BIN" "$ROOT_DIR/lib/telemetry.py" log "$REPO_DIR/.agent-army" "gate_pass" "worker_1" "W1-T1" '{"sha":"abc1234"}')"

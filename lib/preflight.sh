@@ -46,11 +46,16 @@ preflight_check() {
   eval "$(config_dump "$config_path")"
 
   local harness="${COMMANDER_HARNESS:-pi}"
-  if ! command -v "$harness" >/dev/null 2>&1; then
-    if ! command -v pi >/dev/null 2>&1 && ! command -v opencode >/dev/null 2>&1; then
-      log_error "Preflight failed: commander harness '$harness' (neither pi nor opencode) found on PATH"
+  case "$harness" in
+    pi|opencode) ;;
+    *)
+      log_error "Preflight failed: unsupported commander harness '$harness' (expected 'pi' or 'opencode')"
       return 1
-    fi
+      ;;
+  esac
+  if ! command -v "$harness" >/dev/null 2>&1; then
+    log_error "Preflight failed: configured commander harness '$harness' not found on PATH"
+    return 1
   fi
 
   ensure_git_exclude "$repo_dir"

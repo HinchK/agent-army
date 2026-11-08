@@ -139,10 +139,6 @@ profile_ensure() {
     printf 'export TOOLCHAIN_VARS=%q\n' "$resolved_tc"
   } > "$tmp_file"
   mv "$tmp_file" "$profile_file"
-
-  export TEST_CMD="$resolved_cmd"
-  export TEST_GLOBS="$resolved_globs"
-  export TOOLCHAIN_VARS="$resolved_tc"
   return 0
 }
 
