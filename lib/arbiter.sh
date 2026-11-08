@@ -455,7 +455,12 @@ arbiter_promote() {
     return 1
   fi
   local porcelain
-  porcelain="$(git -C "$repo_dir" status --porcelain)"
+  # Parity with preflight_check: the README quickstart leaves
+  # army.config.toml untracked and mission.md lives beside the repo, so both
+  # `??` lines are tolerated there. Promote must accept exactly the same two
+  # (they cannot affect a fast-forward) or every first-run wave halts with a
+  # misleading PROMOTE_FAILED handoff. Anything else stays dirty.
+  porcelain="$(git -C "$repo_dir" status --porcelain | grep -vE '^\?\? (army\.config\.toml|mission\.md)$' || true)"
   if [ -n "$porcelain" ]; then
     log_error "arbiter_promote: root checkout has uncommitted changes"
     return 1

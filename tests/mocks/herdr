@@ -175,6 +175,13 @@ case "$cmd" in
             *) shift ;;
           esac
         done
+        # One-shot injected failure: `touch $MD/agent-start-fail/<name>` makes
+        # exactly this agent start exit 1 (the flag file consumes itself).
+        if [ -n "$MD" ] && [ -f "$MD/agent-start-fail/$name" ]; then
+          rm -f "$MD/agent-start-fail/$name"
+          _log "agent start $name --kind $kind --pane $pane (injected failure)"
+          exit 1
+        fi
         if [ -n "$MD" ]; then
           printf '%s' "$name" > "$MD/agent-name-$name"
           printf '%s' "$pane" > "$MD/agent-pane-$name"

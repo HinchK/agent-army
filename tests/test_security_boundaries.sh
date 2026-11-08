@@ -174,6 +174,31 @@ if compgen -G "$REPO/.agent-army/worktrees/worker_1/.agent-army/anchors/*escape*
   exit 1
 fi
 
+echo "=== Test 2e: missing integration ref fails closed (no vacuous clean scan) ==="
+# rev-list on a missing ref errors into the void; the old loop body never ran
+# and the scan returned 0 (clean) for a secret-bearing commit. The scan must
+# fail non-zero instead, and must still block once the ref is restored.
+git -C "$REPO" checkout -q --detach "$CLEAN_SHA"
+printf 'ghp_EEEEEFFFFFGGGGGHHHHHIIIIIZZZZZ1234567890\n' > "$REPO/leak-noref.txt"
+git -C "$REPO" add leak-noref.txt
+git -C "$REPO" commit -q -m "leak without integration ref"
+NOREF_SHA="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" checkout -q main
+git -C "$REPO" update-ref -d "$INTEGRATION"
+SCAN_NOREF_RC=0
+supervisor_scan_secrets "$REPO" "$INTEGRATION" "$NOREF_SHA" >/dev/null 2>&1 || SCAN_NOREF_RC=$?
+if [ "$SCAN_NOREF_RC" -eq 0 ]; then
+  echo "FAIL: scan must fail closed when the integration ref is missing" >&2
+  exit 1
+fi
+git -C "$REPO" update-ref "$INTEGRATION" "$BASE"
+SCAN_RESTORED_RC=0
+supervisor_scan_secrets "$REPO" "$INTEGRATION" "$NOREF_SHA" >/dev/null 2>&1 || SCAN_RESTORED_RC=$?
+if [ "$SCAN_RESTORED_RC" -ne 20 ]; then
+  echo "FAIL: restored ref must make the same commit block (20), got $SCAN_RESTORED_RC" >&2
+  exit 1
+fi
+
 echo "=== Test 3: WORKER BLOCKED ... AUTH and agent_status=blocked halt as BLOCKED:AUTH ==="
 git -C "$REPO" update-ref "$INTEGRATION" "$(git -C "$REPO" rev-parse "army/$SLUG/worker_1")"
 BLOCK_BASE="$(git -C "$REPO" rev-parse "$INTEGRATION")"

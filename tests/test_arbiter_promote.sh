@@ -254,4 +254,32 @@ rm -rf "$REPO/.agent-army/arbiter.lock"
 arbiter_enqueue "$REPO" "LK-T1" "worker_1" "0000000000000000000000000000000000000000"
 tail -n 1 "$QUEUE_FILE" | jq -e --arg t "LK-T1" '.ticket == $t and .status == "queued"' >/dev/null
 
+echo "=== Test 10: promote tolerates the untracked files preflight allows ==="
+# The README quickstart leaves army.config.toml untracked; preflight accepts
+# `?? army.config.toml` and `?? mission.md`, so promote must accept exactly the
+# same two (and nothing else) or the first green wave halts with a misleading
+# PROMOTE_FAILED handoff.
+git -C "$REPO" rm -q army.config.toml
+git -C "$REPO" commit -q -m "drop tracked army.config.toml (quickstart simulation)"
+cp "$ROOT_DIR/army.config.toml.example" "$REPO/army.config.toml"
+printf 'mission text\n' > "$REPO/mission.md"
+git -C "$REPO" update-ref "refs/heads/army/$SLUG/integration" HEAD
+mk_branch "army/$SLUG/wave-x" HEAD "c.py" "c"
+git -C "$REPO" update-ref "refs/heads/army/$SLUG/integration" "army/$SLUG/wave-x"
+PROMOTED3="$(arbiter_promote "$REPO" --confirm)"
+if [ "$PROMOTED3" != "0" ]; then
+  echo "FAIL: promote must succeed with untracked config/mission (count 0), got rc/$PROMOTED3" >&2
+  exit 1
+fi
+if [ "$(git -C "$REPO" rev-parse main)" != "$(git -C "$REPO" rev-parse "army/$SLUG/wave-x")" ]; then
+  echo "FAIL: promote must still fast-forward main to the integration tip" >&2
+  exit 1
+fi
+printf 'stray\n' > "$REPO/stray-untracked.txt"
+if arbiter_promote "$REPO" --confirm >/dev/null 2>&1; then
+  echo "FAIL: promote must still refuse an unrelated untracked file" >&2
+  exit 1
+fi
+rm -f "$REPO/stray-untracked.txt"
+
 echo "PASS: test_arbiter_promote.sh"

@@ -262,6 +262,39 @@ class TestCommanderUnit(CommanderHarness):
         self.assertNotIn("ARMY_TASK_TIMEOUT_SEC", env)
         self.assertNotIn("ARMY_MAX_REPAIRS_PER_TASK", env)
 
+    def test_ensure_integration_ref_fails_closed(self):
+        # run_mission must not swallow an init-ref failure: with the
+        # integration ref absent, the supervisor's secret scan runs
+        # rev-list against a missing ref and would pass vacuously.
+        env = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp")}
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "r"
+            repo.mkdir()
+            _run(["git", "init", "-q", "-b", "main"], cwd=repo)
+            _run(["git", "config", "user.email", "t@example.com"], cwd=repo)
+            _run(["git", "config", "user.name", "T"], cwd=repo)
+            # Unborn HEAD: init-ref cannot resolve a base commit and the ref
+            # cannot exist -> the guard must fail closed.
+            self.assertFalse(commander._ensure_integration_ref(repo, env))
+            # With a commit + slug state the guard creates the ref, and then
+            # tolerates init-ref's "already exists" refusal on a second call.
+            (repo / "README.md").write_text("x\n")
+            _run(["git", "add", "-A"], cwd=repo)
+            _run(["git", "commit", "-qm", "initial"], cwd=repo)
+            state_dir = repo / ".agent-army"
+            state_dir.mkdir()
+            (state_dir / "state.json").write_text(
+                json.dumps({"slug": "guardref", "zero_integrate_waves": 0})
+            )
+            self.assertTrue(commander._ensure_integration_ref(repo, env))
+            probe = _run(
+                ["git", "-C", str(repo), "show-ref", "--verify", "--quiet",
+                 "refs/heads/army/guardref/integration"],
+                check=False, env=env,
+            )
+            self.assertEqual(probe.returncode, 0)
+            self.assertTrue(commander._ensure_integration_ref(repo, env))
+
     def test_scan_task_security_boundaries(self):
         task = commander.TaskSpec(
             id="T", objective="run gh pr merge 123", owns=["src/a.py"]

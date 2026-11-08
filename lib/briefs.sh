@@ -86,7 +86,14 @@ briefs_dispatch_task() {
   fi
 
   providers_prepare_seat "$worktree_dir" "$kind" "$model"
-  providers_start_fresh_session "$repo_dir" "$seat" "$pane_id" "$kind" "$model"
+  # Explicit rc check: callers run this inside $( ) || rc=$? contexts where
+  # set -e is suppressed, so a failed fresh-session start would otherwise be
+  # silently skipped and the prompt delivered to the previous attempt's
+  # (stale) agent session.
+  if ! providers_start_fresh_session "$repo_dir" "$seat" "$pane_id" "$kind" "$model"; then
+    log_error "briefs_dispatch_task: fresh agent session failed for $task_id on $seat"
+    return 1
+  fi
   _briefs_write_prompt_marker "$anchors_dir/${task_id}.prompt_ts"
   providers_submit_prompt "${seat}-${slug}" "Read .agent-army/briefs/${wave}-${task_id}.xml, execute the task within scope, commit your work, and write the completion anchor file."
 }
@@ -127,7 +134,13 @@ briefs_dispatch_verifier() {
   cp "$verify_xml_src" "$briefs_dir/${wave}-${task_id}-verify.xml"
 
   providers_prepare_seat "$worktree_dir" "$kind" "$model"
-  providers_start_fresh_session "$repo_dir" "verifier" "$pane_id" "$kind" "$model"
+  # Same explicit rc check as briefs_dispatch_task: $( ) || rc=$? callers
+  # suppress set -e, and a skipped fresh-session start would hand the verify
+  # prompt to whatever agent ran before.
+  if ! providers_start_fresh_session "$repo_dir" "verifier" "$pane_id" "$kind" "$model"; then
+    log_error "briefs_dispatch_verifier: fresh verifier session failed for $task_id"
+    return 1
+  fi
   _briefs_write_prompt_marker "$anchors_dir/${task_id}.verify.prompt_ts"
   providers_submit_prompt "verifier-${slug}" "Read .agent-army/briefs/${wave}-${task_id}-verify.xml, audit the commit diff, and write the verifier anchor file."
 }

@@ -246,6 +246,48 @@ case "$GATE_OK" in
 esac
 partition_release_task "$REPO" "W1-T3B"
 
+echo "=== Test 3c: gate fails closed (BLOCKED:SECRET) when the integration ref is missing ==="
+NOREF_SHA="$(commit_on_worker_branch "src/noref_ok.py" "print('ok')")"
+NOREF_BASE="$(git -C "$W1_WT" rev-parse "$NOREF_SHA^")"
+partition_acquire_wave "$REPO" '[{"id":"W1-T3C","seat":"worker_1","owns":["src/noref_ok.py"]}]'
+git -C "$REPO" update-ref -d "$INTEGRATION"
+GATE_NOREF="$(supervisor_gate_commit "$REPO" "3" "W1-T3C" "worker_1" "$NOREF_SHA" "$NOREF_BASE" "src/noref_ok.py" "none" || true)"
+case "$GATE_NOREF" in
+  BLOCKED:SECRET:*) ;;
+  *)
+    echo "FAIL: expected BLOCKED:SECRET:<reason> with the integration ref missing, got '$GATE_NOREF'" >&2
+    exit 1
+    ;;
+esac
+git -C "$REPO" update-ref "$INTEGRATION" "$BASE"
+partition_release_task "$REPO" "W1-T3C"
+
+echo "=== Test 3d: transient verifier dispatch failure is retried, not terminal ==="
+# One injected `agent start verifier-<slug>` failure must not lose the gated
+# GREEN commit to a gate_protocol_error: the gate retries the dispatch and
+# still finishes GREEN.
+VD_SHA="$(commit_on_worker_branch "tests/test_vdispatch.py" "def test_vd(): pass")"
+VD_BASE="$(git -C "$W1_WT" rev-parse "$VD_SHA^")"
+partition_acquire_wave "$REPO" '[{"id":"W1-T3D","seat":"worker_1","owns":["tests/test_vdispatch.py"]}]'
+mkdir -p "$MOCK_DIR/agent-start-fail"
+touch "$MOCK_DIR/agent-start-fail/verifier-$SLUG"
+VSTARTS_BEFORE="$(grep -c 'agent start verifier-' "$CALLS" || true)"
+GATE_VD="$(ARMY_VERIFIER_DISPATCH_TRIES=3 SUPERVISOR_POLL_SEC=0.2 \
+  supervisor_gate_commit "$REPO" "3" "W1-T3D" "worker_1" "$VD_SHA" "$VD_BASE" "tests/test_vdispatch.py" "none" || true)"
+case "$GATE_VD" in
+  GREEN:*) ;;
+  *)
+    echo "FAIL: verifier dispatch retry must end GREEN, got '$GATE_VD'" >&2
+    exit 1
+    ;;
+esac
+VSTARTS_AFTER="$(grep -c 'agent start verifier-' "$CALLS" || true)"
+if [ "$VSTARTS_AFTER" -ne $((VSTARTS_BEFORE + 2)) ]; then
+  echo "FAIL: expected exactly one failed + one retried verifier start (+2), got $((VSTARTS_AFTER - VSTARTS_BEFORE))" >&2
+  exit 1
+fi
+partition_release_task "$REPO" "W1-T3D"
+
 echo "=== Test 4: VERIFIER FAIL -> one repair turn; second failure ends RED and releases the lease ==="
 printf 'VERIFIER FAIL #%%TASK%% deadbeefdeadbeef the diff violates the spec\n' > "$MOCK_DIR/verifier-verdict"
 git -C "$REPO" update-ref "$INTEGRATION" "$(git -C "$W1_WT" rev-parse HEAD)"

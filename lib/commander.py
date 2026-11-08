@@ -365,6 +365,38 @@ def _config_env(cfg: Dict[str, Any], env: Optional[Dict[str, str]] = None) -> Di
     return merged
 
 
+def _ensure_integration_ref(repo_dir: Path, env: Dict[str, str]) -> bool:
+    """arbiter_init-ref refuses when the ref already exists (rc 1). Any other
+    outcome must still leave a resolvable integration ref: with the ref
+    absent, supervisor_scan_secrets enumerates a missing range and would
+    return a vacuous clean verdict, silently disabling the SECRET boundary —
+    so the mission aborts instead of swallowing the failure."""
+    init = _bash("arbiter.sh", ["init-ref", str(repo_dir)], env)
+    if init.returncode == 0:
+        return True
+    try:
+        state = _load_state(repo_dir / ".agent-army")
+    except FileNotFoundError:
+        return False
+    slug = state.get("slug", "")
+    if not slug:
+        return False
+    probe = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_dir),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            f"refs/heads/army/{slug}/integration",
+        ],
+        env=env,
+        capture_output=True,
+    )
+    return probe.returncode == 0
+
+
 def _bash(script: str, args: List[str], env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["/bin/bash", str(LIB_DIR / script)] + args,
@@ -947,7 +979,15 @@ def run_mission(
 
         if not _bash_ok("lifecycle.sh", ["up", str(repo_dir), str(config_path)], env):
             return EXIT_ERROR
-        _bash("arbiter.sh", ["init-ref", str(repo_dir)], env)  # refuses if exists
+        if not _ensure_integration_ref(repo_dir, env):
+            # init-ref failed and the ref does not resolve: proceeding would
+            # disable the supervisor's secret-scan boundary (vacuous range).
+            print(
+                "error: integration ref missing after arbiter init-ref; "
+                "secret-scan boundary would be vacuous — aborting",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
 
         max_waves = int(cfg.get("army_max_waves", 15) or 15)
         accounting_pending = False

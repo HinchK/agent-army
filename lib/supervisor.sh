@@ -123,15 +123,35 @@ PY
 # supervisor_scan_secrets <repo_dir> <integration_ref> <sha>
 # Walks every object introduced between the integration tip and <sha>
 # (git rev-list --objects), filters to blobs, and blocks on secret-looking
-# paths or blob content. Returns 20 on a hit, 0 when clean. grep -a keeps
-# binary blobs from aborting the pipeline; greps live inside `if` so exit 1
-# (no match) never trips set -e.
+# paths or blob content. Returns 20 on a hit, 0 when clean, and 21 (fail
+# closed) when the range cannot be enumerated — a missing integration ref
+# must never produce a vacuous clean verdict. grep -a keeps binary blobs
+# from aborting the pipeline; greps live inside `if` so exit 1 (no match)
+# never trips set -e.
 supervisor_scan_secrets() {
   local repo_dir="$1"
   local integration_ref="$2"
   local sha="$3"
 
   local secret_regex='-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}'
+
+  # Fail closed: rev-list against an unresolvable ref errors into the void
+  # and the walk below would pass vacuously, silently disabling the SECRET
+  # boundary for every gated commit.
+  if ! git -C "$repo_dir" rev-parse --verify --quiet "${integration_ref}^{commit}" >/dev/null 2>&1; then
+    printf 'supervisor_scan_secrets: integration ref %s does not resolve\n' "$integration_ref" >&2
+    return 21
+  fi
+  local objects rev_err rev_rc=0
+  rev_err="$(mktemp "${TMPDIR:-/tmp}/army-scan-err.XXXXXX")"
+  objects="$(git -C "$repo_dir" rev-list --objects "${integration_ref}..${sha}" 2>"$rev_err")" || rev_rc=$?
+  if [ "$rev_rc" -ne 0 ]; then
+    printf 'supervisor_scan_secrets: rev-list failed for %s..%s: %s\n' \
+      "$integration_ref" "$sha" "$(tail -n 1 "$rev_err")" >&2
+    rm -f "$rev_err"
+    return 21
+  fi
+  rm -f "$rev_err"
 
   local line oid path objtype
   while IFS= read -r line; do
@@ -168,7 +188,7 @@ supervisor_scan_secrets() {
       printf 'supervisor_scan_secrets: secret pattern in blob %s (%s)\n' "$oid" "$path" >&2
       return 20
     fi
-  done < <(git -C "$repo_dir" rev-list --objects "${integration_ref}..${sha}" 2>/dev/null)
+  done <<< "$objects"
 
   return 0
 }
@@ -308,7 +328,9 @@ supervisor_gate_commit() {
   # Must match _arbiter_ref's naming (refs/heads/army/<slug>/integration): a
   # mistyped ref makes rev-list fail silently and the scan pass vacuously.
   scan_err="$(supervisor_scan_secrets "$repo_dir" "refs/heads/army/$slug/integration" "$sha" 2>&1 >/dev/null)" || scan_rc=$?
-  if [ "$scan_rc" = "20" ]; then
+  # Any non-zero scan result blocks: 20 is a hit, 21 means the range could
+  # not be enumerated (missing ref) — a vacuous pass must never go GREEN.
+  if [ "$scan_rc" -ne 0 ]; then
     _supervisor_telemetry "$repo_dir" "task_blocked" "$seat" "$task_id" "{\"boundary\":\"SECRET\",\"reason\":\"$(printf '%s' "$scan_err" | tail -n 1)\"}"
     printf 'BLOCKED:SECRET:%s\n' "$(printf '%s' "$scan_err" | tail -n 1)"
     return 2
@@ -343,7 +365,19 @@ supervisor_gate_commit() {
     local vxml="$state_dir/briefs/${wave}-${task_id}-verify.xml"
     mkdir -p "$state_dir/briefs"
     _supervisor_render_verifier_brief "$vxml" "$task_id" "$sha" "$base_ref"
-    briefs_dispatch_verifier "$repo_dir" "$wave" "$task_id" "$vxml"
+    # A transient verifier dispatch failure (e.g. herdr hiccup) must not
+    # lose the fully gated GREEN commit: retry a bounded number of times,
+    # then surface BUSY so the wave keeps the task active and re-gates on
+    # the next poll instead of mislabeling it gate_protocol_error.
+    local v_tries=0
+    until briefs_dispatch_verifier "$repo_dir" "$wave" "$task_id" "$vxml"; do
+      v_tries=$((v_tries + 1))
+      if [ "$v_tries" -ge "${ARMY_VERIFIER_DISPATCH_TRIES:-3}" ]; then
+        printf 'BUSY:verifier_dispatch\n'
+        return 3
+      fi
+      sleep "${SUPERVISOR_POLL_SEC:-2}"
+    done
 
     local v_wt v_ts v_deadline verdict=""
     v_wt="$(jq -r '.seats.verifier.worktree_dir // empty' "$seats_file")"
@@ -539,10 +573,11 @@ _supervisor_step_task() {
         _sup_terminal "$repo_dir" "$run_dir" "$task_id" "blocked" "$boundary2" "$detail"
         return 0
         ;;
-      BUSY:enqueue)
-        # The arbiter lock is held (manual drain mid-gate). Keep the task
-        # active: anchor and gate result stay valid, the next poll re-runs
-        # the gate and retries the enqueue once the lock frees.
+      BUSY:*)
+        # The arbiter lock is held (manual drain mid-gate: BUSY:enqueue) or
+        # the verifier dispatch kept failing (BUSY:verifier_dispatch). Keep
+        # the task active: the anchor and gate result stay valid, the next
+        # poll re-runs the gate and retries once the transient clears.
         _supervisor_telemetry "$repo_dir" "enqueue_busy" "$seat" "$task_id" "{\"sha\":\"$sha\"}"
         return 0
         ;;
