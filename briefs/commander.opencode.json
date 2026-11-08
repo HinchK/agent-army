@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "commander": {
+      "description": "Out-of-swarm agent-army Commander: read-only decision engine.",
+      "mode": "primary",
+      "permission": {
+        "*": "deny",
+        "read": "allow",
+        "bash": "deny",
+        "shell": "deny",
+        "edit": "deny",
+        "write": "deny"
+      }
+    }
+  }
+}

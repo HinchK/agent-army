@@ -36,9 +36,7 @@ test:
 		fi; \
 	done; \
 	source lib/pyenv.sh && resolve_python; \
-	for t in tests/test_*.py; do \
-		if [ -f "$$t" ]; then \
-			echo "Running $$t..."; \
-			"$$PYTHON_BIN" -m unittest "$$t"; \
-		fi; \
-	done
+	if ls tests/test_*.py >/dev/null 2>&1; then \
+		echo "Discovering Python tests..."; \
+		"$$PYTHON_BIN" -m unittest discover -s tests -p "test_*.py" -v; \
+	fi

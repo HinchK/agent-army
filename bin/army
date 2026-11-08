@@ -1,0 +1,145 @@
+#!/bin/bash
+set -euo pipefail
+
+ARMY_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+usage() {
+  cat >&2 <<'EOF'
+army — autonomous, mission-oriented agent organization
+
+Usage:
+  army setup  <repo_dir>                 Write army.config.toml from the detected harnesses
+  army up     <repo_dir> [config]        Seat the standing Herdr worktree pool
+  army down   <repo_dir>                 Snapshot dirty worktrees and close seat panes
+  army status <repo_dir>                 Print state, seats, and integration queue summary
+  army verify <repo_dir> [config]        Fail closed when critical seats are missing
+  army run    <repo_dir> --mission <file> [--commander pi|opencode] [--model <model>]
+  army resume <repo_dir>                 Resume a MISSION_BLOCKED mission after human action
+  army arbiter {init-ref|enqueue|drain|promote} <args...>
+
+Exit codes: 0 mission complete; 1 error; 20 MISSION_BLOCKED (handoff.md written).
+EOF
+}
+
+require_repo() {
+  local repo="${1:-}"
+  if [ -z "$repo" ] || [ ! -d "$repo" ]; then
+    echo "army: repository directory required (got '${repo:-}')" >&2
+    usage
+    exit 1
+  fi
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  setup)
+    repo="${1:-}"
+    require_repo "$repo"
+    config="$repo/army.config.toml"
+    if [ -f "$config" ]; then
+      echo "army: $config already exists; leaving it untouched" >&2
+      exit 0
+    fi
+    harness="opencode"
+    if command -v pi >/dev/null 2>&1; then
+      harness="pi"
+    elif command -v opencode >/dev/null 2>&1; then
+      harness="opencode"
+    fi
+    sed -E "s/^harness = \"pi\"/harness = \"$harness\"/" \
+      "$ARMY_HOME/army.config.toml.example" > "$config"
+    echo "army: wrote $config (commander harness: $harness)"
+    ;;
+
+  up)
+    repo="${1:-}"
+    require_repo "$repo"
+    config="${2:-$repo/army.config.toml}"
+    /bin/bash "$ARMY_HOME/lib/preflight.sh" check "$repo" "$config"
+    /bin/bash "$ARMY_HOME/lib/lifecycle.sh" up "$repo" "$config"
+    /bin/bash "$ARMY_HOME/lib/lifecycle.sh" verify "$repo" "$config"
+    ;;
+
+  down)
+    repo="${1:-}"
+    require_repo "$repo"
+    /bin/bash "$ARMY_HOME/lib/lifecycle.sh" down "$repo"
+    ;;
+
+  verify)
+    repo="${1:-}"
+    require_repo "$repo"
+    config="${2:-$repo/army.config.toml}"
+    /bin/bash "$ARMY_HOME/lib/lifecycle.sh" verify "$repo" "$config"
+    ;;
+
+  status)
+    repo="${1:-}"
+    require_repo "$repo"
+    state_dir="$repo/.agent-army"
+    if [ -f "$state_dir/state.json" ]; then
+      echo "== state =="
+      jq . "$state_dir/state.json"
+    else
+      echo "army: no state yet (run army up or army run)" >&2
+    fi
+    if [ -f "$state_dir/seats.json" ]; then
+      echo "== seats =="
+      jq -r '.seats | to_entries[] | "\(.key)\t\(.value.role)\t\(.value.pane_id)\t\(.value.worktree_dir)"' \
+        "$state_dir/seats.json"
+    fi
+    if [ -f "$state_dir/integration.jsonl" ]; then
+      echo "== integration queue =="
+      jq -r '"\(.ticket)\t\(.seat)\t\(.status)\t\(.priority)\t\(.sha[0:8])"' \
+        "$state_dir/integration.jsonl"
+    fi
+    ;;
+
+  run)
+    repo="${1:-}"
+    require_repo "$repo"
+    shift
+    # shellcheck source=lib/pyenv.sh disable=SC1091
+    source "$ARMY_HOME/lib/pyenv.sh"
+    resolve_python
+    exec "$PYTHON_BIN" "$ARMY_HOME/lib/commander.py" run "$repo" "$@"
+    ;;
+
+  resume)
+    repo="${1:-}"
+    require_repo "$repo"
+    shift
+    # shellcheck source=lib/pyenv.sh disable=SC1091
+    source "$ARMY_HOME/lib/pyenv.sh"
+    resolve_python
+    exec "$PYTHON_BIN" "$ARMY_HOME/lib/commander.py" resume "$repo" "$@"
+    ;;
+
+  arbiter)
+    sub="${1:-}"
+    shift || true
+    case "$sub" in
+      init-ref|enqueue|drain|promote)
+        exec /bin/bash "$ARMY_HOME/lib/arbiter.sh" "$sub" "$@"
+        ;;
+      *)
+        echo "army: unknown arbiter subcommand '${sub:-}'" >&2
+        usage
+        exit 1
+        ;;
+    esac
+    ;;
+
+  -h|--help|help|"")
+    usage
+    exit 0
+    ;;
+
+  *)
+    echo "army: unknown command '$cmd'" >&2
+    usage
+    exit 1
+    ;;
+esac

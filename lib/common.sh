@@ -273,3 +273,16 @@ for raw in (ws_raw, pane_raw):
 sys.exit(1)
 PY
 }
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    gate)
+      shift
+      clean_gate_exec "$@"
+      ;;
+    *)
+      echo "Usage: common.sh gate <cwd> <profile_env_file> <timeout_sec> <test_cmd>" >&2
+      exit 1
+      ;;
+  esac
+fi

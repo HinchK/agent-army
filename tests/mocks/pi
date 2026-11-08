@@ -1,0 +1,37 @@
+#!/bin/bash
+# tests/mocks/pi — deterministic pi harness mock for agent-army tests.
+#
+# Decision chunks are read from $ARMY_TEST_COMMANDER_DECISIONS (one
+# <commander_decision> block per chunk, chunks separated by a line containing
+# only %%). Each invocation prints the next chunk wrapped in chatter and
+# markdown fences (so parse_decision_xml's fence handling is exercised). The
+# invocation counter lives in $ARMY_TEST_COMMANDER_COUNT (created on first
+# use). Every invocation appends to $HERDR_MOCK_DIR/pi-calls.log when set.
+set -uo pipefail
+
+DEC="${ARMY_TEST_COMMANDER_DECISIONS:-}"
+COUNT_FILE="${ARMY_TEST_COMMANDER_COUNT:?}"
+
+if [ -n "${HERDR_MOCK_DIR:-}" ]; then
+  printf 'pi invoked\n' >> "$HERDR_MOCK_DIR/pi-calls.log"
+fi
+
+[ -n "$DEC" ] && [ -f "$DEC" ] || exit 0
+
+n=0
+[ -f "$COUNT_FILE" ] && n="$(cat "$COUNT_FILE" 2>/dev/null || printf '0')"
+case "$n" in
+  ''|*[!0-9]*) n=0 ;;
+esac
+n=$((n + 1))
+printf '%s\n' "$n" > "$COUNT_FILE"
+
+chunk="$(awk -v target="$n" '
+  $0 == "%%" { sep++; next }
+  sep == target - 1 { print }
+' "$DEC")"
+
+if [ -n "$chunk" ]; then
+  printf 'Sure — here is the decision:\n```xml\n%s\n```\nDone.\n' "$chunk"
+fi
+exit 0

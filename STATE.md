@@ -1,7 +1,7 @@
 # Agent-Army State Checkpoint (`STATE.md`)
 
-**Updated:** 2026-11-07  
-**Phase:** Implementation Plan Complete — Awaiting Execution Method Selection  
+**Updated:** 2026-11-08  
+**Phase:** Implementation Complete — Tasks 1–6 landed on `feat/agent-army`; `make check` green  
 **Design Spec:** [docs/superpowers/specs/2026-11-07-agent-army-design.md](docs/superpowers/specs/2026-11-07-agent-army-design.md)  
 **Implementation Plan:** [docs/superpowers/plans/2026-11-07-agent-army.md](docs/superpowers/plans/2026-11-07-agent-army.md)
 
@@ -26,10 +26,15 @@
 
 ## 2. Open Items / Unresolved Blockers
 
-- User review of [docs/superpowers/plans/2026-11-07-agent-army.md](docs/superpowers/plans/2026-11-07-agent-army.md) and selection of execution approach (`Subagent-driven` vs. `Native`).
+- None from the implementation plan. All six tasks are implemented and tested
+  (`tests/` suites + `tests/test_commander_loop.py`, mocks in `tests/mocks/`).
+- Deferred minor from Task 1 review: add a timeout assertion for
+  `clean_gate_exec` in `tests/test_config_profile.sh`.
 
 ---
 
 ## 3. Immediate Next Step
 
-- Execute Tasks 1–6 of [docs/superpowers/plans/2026-11-07-agent-army.md](docs/superpowers/plans/2026-11-07-agent-army.md) once the user selects the execution approach.
+- Review the `feat/agent-army` branch; merge to `main` when ready. Runtime
+  validation against a live Herdr workspace + real `pi`/`opencode` harness is
+  the first post-merge activity.
