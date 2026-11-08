@@ -1,7 +1,7 @@
 # Agent-Army State Checkpoint (`STATE.md`)
 
 **Updated:** 2026-11-08  
-**Phase:** Implementation + Branch Review Complete — `feat/agent-army` reviewed and fix-rounded; ready to merge to `main`  
+**Phase:** Implementation + Branch Reviews Complete — `feat/agent-army` reviewed (3 review cycles) and fix-rounded through `946ff94`; ready to merge to `main`  
 **Design Spec:** [docs/superpowers/specs/2026-11-07-agent-army-design.md](docs/superpowers/specs/2026-11-07-agent-army-design.md)  
 **Implementation Plan:** [docs/superpowers/plans/2026-11-07-agent-army.md](docs/superpowers/plans/2026-11-07-agent-army.md)
 
@@ -36,6 +36,12 @@
 ## 3. Immediate Next Step
 
 - Merge `feat/agent-army` to `main` (branch review complete: full review
-  2852f6c..8583c6a plus a verified fix re-review through d8c2637; make check
-  green). Runtime validation against a live Herdr workspace + real
-  `pi`/`opencode` harness is the first post-merge activity.
+  2852f6c..8583c6a, verified fix re-review through d8c2637, and a final
+  independent whole-branch review fa83678..462e32d whose three Important
+  findings — fail-open secret scan on a missing integration ref,
+  preflight/promote parity on untracked `army.config.toml`/`mission.md`,
+  and transient verifier-dispatch failure losing GREEN work — are fixed
+  with RED→GREEN tests at `946ff94`; `make check` green: 8 bash suites +
+  13 python tests, 0 ShellCheck warnings). Runtime validation against a
+  live Herdr workspace + real `pi`/`opencode` harness is the first
+  post-merge activity.
