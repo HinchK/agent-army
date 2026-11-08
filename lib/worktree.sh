@@ -63,6 +63,11 @@ worktree_snapshot() {
 
   local dest
   dest="$repo_dir/.agent-army/snapshots/$(date +%s)-$$/$seat"
+  local bump=0
+  while [ -e "$dest" ]; do
+    bump=$((bump + 1))
+    dest="$repo_dir/.agent-army/snapshots/$(date +%s)-$$-$bump/$seat"
+  done
   mkdir -p "$dest"
 
   git -C "$wt" status --porcelain > "$dest/status.porcelain"
