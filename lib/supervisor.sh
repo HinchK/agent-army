@@ -15,36 +15,10 @@ source "$_SUP_DIR/partition.sh"
 # shellcheck source=lib/briefs.sh disable=SC1091
 source "$_SUP_DIR/briefs.sh"
 
-# Delegate enqueue to lib/arbiter.sh once Task 5 lands it; before that append
-# the identical JSONL row directly (SDD Ruling 2).
-if [ -f "$_SUP_DIR/arbiter.sh" ]; then
-  # shellcheck source=lib/arbiter.sh disable=SC1091
-  source "$_SUP_DIR/arbiter.sh"
-fi
-if ! declare -f arbiter_enqueue >/dev/null 2>&1; then
-  arbiter_enqueue() {
-    local repo_dir="$1"
-    local task_id="$2"
-    local seat="$3"
-    local sha="$4"
-    local priority="${5:-normal}"
-    local supersedes="${6:-}"
-    local state_dir="$repo_dir/.agent-army"
-    local queue="$state_dir/integration.jsonl"
-    mkdir -p "$state_dir"
-    touch "$queue"
-    local ts
-    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    jq -nc \
-      --arg ts "$ts" \
-      --arg t "$task_id" \
-      --arg s "$seat" \
-      --arg sha "$sha" \
-      --arg p "$priority" \
-      --arg sup "$supersedes" \
-      '{ts:$ts,ticket:$t,seat:$s,sha:$sha,status:"queued",priority:$p,supersedes:$sup}' >> "$queue"
-  }
-fi
+# lib/arbiter.sh always ships alongside this file now; the SDD Ruling 2
+# standalone fallback stub is retired so every queue mutation is locked.
+# shellcheck source=lib/arbiter.sh disable=SC1091
+source "$_SUP_DIR/arbiter.sh"
 
 ANCHOR_LINE_RE='^[[:space:]]*(WORKER DONE|WORKER BLOCKED|VERIFIER PASS|VERIFIER FAIL) #[A-Za-z0-9_-]+'
 
@@ -273,7 +247,9 @@ _supervisor_render_repair_brief() {
 }
 
 # supervisor_gate_commit <repo_dir> <wave> <task_id> <seat> <sha> <base_ref> <owns_csv> <verify_attr> [enqueue_priority] [supersedes]
-# Prints GREEN:<sha> (rc 0), RED:<reason> (rc 1), or BLOCKED:<BOUNDARY>:<detail> (rc 2).
+# Prints GREEN:<sha> (rc 0), RED:<reason> (rc 1), BLOCKED:<BOUNDARY>:<detail>
+# (rc 2), or BUSY:enqueue (rc 3) when the arbiter lock stays busy past
+# ARMY_ENQUEUE_WAIT_SEC and the caller should retry later.
 supervisor_gate_commit() {
   local repo_dir="$1"
   local wave="$2"
@@ -406,9 +382,20 @@ supervisor_gate_commit() {
     esac
   fi
 
-  # 6. enqueue + GREEN
+  # 6. enqueue + GREEN. A lock-busy enqueue (e.g. a manual `arbiter drain`
+  # holding the arbiter lock through a long combined gate) must not destroy a
+  # fully gated GREEN commit: retry inside a bounded window, then surface
+  # BUSY:enqueue so the wave keeps the task active and retries on the next
+  # poll instead of mislabeling it gate_protocol_error and recycling the seat.
   _supervisor_telemetry "$repo_dir" "gate_pass" "$seat" "$task_id" "{\"sha\":\"$sha\",\"wave\":\"$wave\"}"
-  arbiter_enqueue "$repo_dir" "$task_id" "$seat" "$sha" "$enqueue_priority" "$supersedes"
+  local enq_deadline=$(( $(date +%s) + ${ARMY_ENQUEUE_WAIT_SEC:-120} ))
+  while ! arbiter_enqueue "$repo_dir" "$task_id" "$seat" "$sha" "$enqueue_priority" "$supersedes"; do
+    if [ "$(date +%s)" -ge "$enq_deadline" ]; then
+      printf 'BUSY:enqueue\n'
+      return 3
+    fi
+    sleep "${SUPERVISOR_POLL_SEC:-2}"
+  done
   printf 'GREEN:%s\n' "$sha"
   return 0
 }
@@ -470,7 +457,11 @@ _sup_terminal() {
       tip="HEAD"
     fi
     if [ -n "$(git -C "$wt" status --porcelain)" ]; then
-      worktree_snapshot "$repo_dir" "$seat" >/dev/null 2>&1 || true
+      local recycle_snapshot
+      recycle_snapshot="$(worktree_snapshot "$repo_dir" "$seat" 2>/dev/null || true)"
+      if [ -n "$recycle_snapshot" ] && [ -z "$snapshot" ]; then
+        _sup_set_str "$run_dir" "snapshot" "$recycle_snapshot" "$task_id"
+      fi
     fi
     git -C "$wt" reset --hard "$(git -C "$repo_dir" rev-parse "$tip")" >/dev/null 2>&1 || true
   fi
@@ -546,6 +537,13 @@ _supervisor_step_task() {
         boundary2="${boundary2%%:*}"
         detail="${gate_out#BLOCKED:*:}"
         _sup_terminal "$repo_dir" "$run_dir" "$task_id" "blocked" "$boundary2" "$detail"
+        return 0
+        ;;
+      BUSY:enqueue)
+        # The arbiter lock is held (manual drain mid-gate). Keep the task
+        # active: anchor and gate result stay valid, the next poll re-runs
+        # the gate and retries the enqueue once the lock frees.
+        _supervisor_telemetry "$repo_dir" "enqueue_busy" "$seat" "$task_id" "{\"sha\":\"$sha\"}"
         return 0
         ;;
       RED:*)

@@ -216,6 +216,36 @@ if ! grep -q 'agent prompt verifier-' "$CALLS"; then
 fi
 partition_release_task "$REPO" "W1-T2"
 
+echo "=== Test 3b: lock-busy enqueue surfaces BUSY:enqueue instead of destroying the GREEN gate ==="
+BUSY_SHA="$(commit_on_worker_branch "src/busy_ok.py" "print('ok')")"
+BUSY_BASE="$(git -C "$W1_WT" rev-parse "$BUSY_SHA^")"
+partition_acquire_wave "$REPO" '[{"id":"W1-T3B","seat":"worker_1","owns":["src/busy_ok.py"]}]'
+mkdir -p "$REPO/.agent-army/arbiter.lock"
+printf '%s\n' $$ > "$REPO/.agent-army/arbiter.lock/pid"   # live holder: drain is "running"
+GATE_BUSY="$(ARMY_ENQUEUE_WAIT_SEC=1 SUPERVISOR_POLL_SEC=0.2 \
+  supervisor_gate_commit "$REPO" "3" "W1-T3B" "worker_1" "$BUSY_SHA" "$BUSY_BASE" "src/busy_ok.py" "none" || true)"
+case "$GATE_BUSY" in
+  BUSY:enqueue) ;;
+  *)
+    echo "FAIL: expected BUSY:enqueue under a held arbiter lock, got '$GATE_BUSY'" >&2
+    exit 1
+    ;;
+esac
+if [ "$(git -C "$W1_WT" rev-parse HEAD)" != "$BUSY_SHA" ]; then
+  echo "FAIL: a lock-busy enqueue must not touch the gated worktree" >&2
+  exit 1
+fi
+rm -rf "$REPO/.agent-army/arbiter.lock"
+GATE_OK="$(supervisor_gate_commit "$REPO" "3" "W1-T3B" "worker_1" "$BUSY_SHA" "$BUSY_BASE" "src/busy_ok.py" "none" || true)"
+case "$GATE_OK" in
+  GREEN:*) ;;
+  *)
+    echo "FAIL: expected GREEN after the lock frees, got '$GATE_OK'" >&2
+    exit 1
+    ;;
+esac
+partition_release_task "$REPO" "W1-T3B"
+
 echo "=== Test 4: VERIFIER FAIL -> one repair turn; second failure ends RED and releases the lease ==="
 printf 'VERIFIER FAIL #%%TASK%% deadbeefdeadbeef the diff violates the spec\n' > "$MOCK_DIR/verifier-verdict"
 git -C "$REPO" update-ref "$INTEGRATION" "$(git -C "$W1_WT" rev-parse HEAD)"

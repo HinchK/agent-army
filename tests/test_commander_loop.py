@@ -421,7 +421,8 @@ class TestCommanderLoop(CommanderHarness):
         _run(["git", "commit", "-qm", "t1"], cwd=self.repo)
         t1 = _run(["git", "rev-parse", "HEAD"], cwd=self.repo).stdout.strip()
         _run(["git", "checkout", "-q", "main"], cwd=self.repo)
-        _run(["git", "update-ref", f"refs/heads/{self.state()['slug']}/integration", t1], cwd=self.repo)
+        # Same ref convention as arbiter.sh _arbiter_ref (refs/heads/army/<slug>/...).
+        _run(["git", "update-ref", f"refs/heads/army/{self.state()['slug']}/integration", t1], cwd=self.repo)
         _run(["/bin/bash", str(ROOT / "lib" / "arbiter.sh"), "enqueue",
               str(self.repo), "T1", "worker_1", t1], env=self.env)
 

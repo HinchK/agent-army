@@ -15,11 +15,24 @@ source "$_BRIEFS_DIR/providers.sh"
 # Records "<epoch-seconds.fraction> <nonce>". The nonce uniquifies each
 # attempt; the sub-second timestamp lets supervisor_read_anchor reject an
 # anchor written back within the same 1-second mtime tick. Written AFTER the
-# fresh agent session starts (previous attempt's agent already interrupted),
-# so no stale agent can produce an anchor newer than the marker.
+# fresh agent session starts, so any anchor predating this attempt (the
+# previous agent is interrupted best-effort by providers_start_fresh_session)
+# is older than the marker.
 _briefs_write_prompt_marker() {
   resolve_python
   "$PYTHON_BIN" -c 'import secrets, time; print("%.6f %s" % (time.time(), secrets.token_hex(4)))' > "$1"
+}
+
+# _briefs_valid_task_id <id>
+# Mirrors commander.py's _TASK_ID_RE: 1-64 chars of [A-Za-z0-9_-] starting
+# with an alphanumeric. Ids are interpolated into anchor/brief paths, so a
+# '/' or '..' would escape those directories.
+_briefs_valid_task_id() {
+  local id="$1"
+  case "$id" in
+    ''|*[!A-Za-z0-9_-]*|[-_]*) return 1 ;;
+  esac
+  [ "${#id}" -le 64 ]
 }
 
 # briefs_dispatch_task <repo_dir> <seat> <wave> <task_id> <xml_file_src>
@@ -40,14 +53,12 @@ briefs_dispatch_task() {
   local task_id="$4"
   local xml_src="$5"
 
-  # task_id is interpolated into anchor/brief paths: reject anything outside
-  # [A-Za-z0-9_-] (path traversal, hidden files, separators) fail-closed.
-  case "$task_id" in
-    ''|*[!A-Za-z0-9_-]*)
-      log_error "briefs_dispatch_task: invalid task id '$task_id' (need [A-Za-z0-9_-])"
-      return 1
-      ;;
-  esac
+  # task_id is interpolated into anchor/brief paths: reject anything the
+  # Python boundary would reject (path traversal, hidden files, separators).
+  if ! _briefs_valid_task_id "$task_id"; then
+    log_error "briefs_dispatch_task: invalid task id '$task_id' (need [A-Za-z0-9][A-Za-z0-9_-]{0,63})"
+    return 1
+  fi
 
   local slug
   slug="$(state_read_slug "$repo_dir")"
@@ -89,12 +100,10 @@ briefs_dispatch_verifier() {
   local verify_xml_src="$4"
 
   # Same charset guard as briefs_dispatch_task: the id reaches anchor paths.
-  case "$task_id" in
-    ''|*[!A-Za-z0-9_-]*)
-      log_error "briefs_dispatch_verifier: invalid task id '$task_id' (need [A-Za-z0-9_-])"
-      return 1
-      ;;
-  esac
+  if ! _briefs_valid_task_id "$task_id"; then
+    log_error "briefs_dispatch_verifier: invalid task id '$task_id' (need [A-Za-z0-9][A-Za-z0-9_-]{0,63})"
+    return 1
+  fi
 
   local slug
   slug="$(state_read_slug "$repo_dir")"
