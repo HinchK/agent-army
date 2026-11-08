@@ -1,14 +1,16 @@
 # Agent-Army — Completion Record
 
 **Updated:** 2026-11-08  
-**Repository Root (`main`):** `/Users/hinchk/agent-army-advancement/agent-army` (`main` @ merge of `ff69189`)  
+**Repository Root (`main`):** `/Users/hinchk/agent-army-advancement/agent-army` (implementation tip `ff69189`)  
 **Design Spec:** [docs/superpowers/specs/2026-11-07-agent-army-design.md](docs/superpowers/specs/2026-11-07-agent-army-design.md)  
 **Implementation Plan:** [docs/superpowers/plans/2026-11-07-agent-army.md](docs/superpowers/plans/2026-11-07-agent-army.md)  
 **State:** [STATE.md](STATE.md)
 
 > This file was the 2026-11-07 handoff directing execution of Tasks 2–6.
 > That work is complete and merged; the handoff is retired and this record
-> replaces it. The original handoff text lives in git history at `fa83678`.
+> replaces it. The original handoff text was never committed on `main`.
+> The last copy in this clone is `408c139:HANDOFF.md`, a local checkpoint
+> and not an ancestor of `main`, so a fresh clone will not have it.
 
 ---
 
