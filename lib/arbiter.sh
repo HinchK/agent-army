@@ -94,7 +94,15 @@ arbiter_init_ref() {
   git -C "$repo_dir" update-ref "$ref" "$(git -C "$repo_dir" rev-parse "$base")"
 }
 
+# _arbiter_enqueue_locked <queue> <row>
+_arbiter_enqueue_locked() {
+  printf '%s\n' "$2" >> "$1"
+}
+
 # arbiter_enqueue <repo_dir> <task_id> <seat> <sha> [priority] [supersedes_task_id]
+# Appends one queued row under the arbiter lock so a concurrent drain's
+# read-rewrite cycle can never drop the record (drain holds the same lock for
+# the whole pick/merge/rewrite loop).
 arbiter_enqueue() {
   local repo_dir="$1"
   local task_id="$2"
@@ -104,18 +112,25 @@ arbiter_enqueue() {
   local supersedes="${6:-}"
   local queue
   queue="$(_arbiter_queue_path "$repo_dir")"
-  mkdir -p "$(dirname "$queue")"
+  local state_dir
+  state_dir="$(dirname "$queue")"
+  mkdir -p "$state_dir"
   touch "$queue"
-  local ts
+  local ts row
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  jq -nc \
+  row="$(jq -nc \
     --arg ts "$ts" \
     --arg t "$task_id" \
     --arg s "$seat" \
     --arg sha "$sha" \
     --arg p "$priority" \
     --arg sup "$supersedes" \
-    '{ts:$ts,ticket:$t,seat:$s,sha:$sha,status:"queued",priority:$p,supersedes:$sup}' >> "$queue"
+    '{ts:$ts,ticket:$t,seat:$s,sha:$sha,status:"queued",priority:$p,supersedes:$sup}')"
+  local append_rc=0
+  arbiter_lock "$state_dir" || return 1
+  _arbiter_enqueue_locked "$queue" "$row" || append_rc=$?
+  arbiter_unlock "$state_dir"
+  return "$append_rc"
 }
 
 # _arbiter_pick <queue_path>
@@ -369,6 +384,48 @@ PY
   return 1
 }
 
+# _arbiter_promote_mark <repo_dir> <queue>
+# Releases integrated/superseded leases, rewrites integrated->promoted, and
+# prints the promoted count. Runs under the arbiter lock.
+_arbiter_promote_mark() {
+  local repo_dir="$1"
+  local queue="$2"
+  local tickets
+  tickets="$("$PYTHON_BIN" - "$queue" <<'PY'
+import json
+import sys
+
+promoted = []
+superseded = []
+rows = []
+with open(sys.argv[1], encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if line:
+            rows.append(json.loads(line))
+for row in rows:
+    if row.get("status") == "integrated":
+        promoted.append(row.get("ticket", ""))
+    elif row.get("status") == "superseded":
+        superseded.append(row.get("ticket", ""))
+for ticket in promoted + superseded:
+    print(ticket)
+PY
+)"
+  if [ -n "$tickets" ]; then
+    local ticket
+    while IFS= read -r ticket; do
+      [ -n "$ticket" ] || continue
+      partition_release_task "$repo_dir" "$ticket" >/dev/null 2>&1 || true
+    done <<< "$tickets"
+  fi
+
+  local count
+  count="$(jq -r 'select(.status == "integrated") | .ticket' "$queue" | wc -l | tr -d ' ')"
+  _arbiter_rewrite "$queue" "mark_integrated" "promoted"
+  printf '%s\n' "$count"
+}
+
 # arbiter_promote <repo_dir> --confirm
 # Fast-forwards local main to the integration tip (never pushes), marks
 # integrated records promoted, releases their leases, and syncs the idle
@@ -414,39 +471,17 @@ arbiter_promote() {
   [ -f "$queue" ] || { printf '0\n'; return 0; }
 
   resolve_python
-  local tickets
-  tickets="$("$PYTHON_BIN" - "$queue" <<'PY'
-import json
-import sys
-
-promoted = []
-superseded = []
-rows = []
-with open(sys.argv[1], encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if line:
-            rows.append(json.loads(line))
-for row in rows:
-    if row.get("status") == "integrated":
-        promoted.append(row.get("ticket", ""))
-    elif row.get("status") == "superseded":
-        superseded.append(row.get("ticket", ""))
-for ticket in promoted + superseded:
-    print(ticket)
-PY
-)"
-  if [ -n "$tickets" ]; then
-    local ticket
-    while IFS= read -r ticket; do
-      [ -n "$ticket" ] || continue
-      partition_release_task "$repo_dir" "$ticket" >/dev/null 2>&1 || true
-    done <<< "$tickets"
+  # The tickets read and the mark_integrated rewrite happen under the arbiter
+  # lock: an enqueue landing between them would otherwise be silently dropped
+  # by the os.replace rewrite (the same failure mode drain's lock prevents).
+  # The guarded call keeps the unlock on every path.
+  local mark_rc=0 count=""
+  arbiter_lock "$repo_dir/.agent-army" || return 1
+  count="$(_arbiter_promote_mark "$repo_dir" "$queue")" || mark_rc=$?
+  arbiter_unlock "$repo_dir/.agent-army"
+  if [ "$mark_rc" -ne 0 ]; then
+    return "$mark_rc"
   fi
-
-  local count
-  count="$(jq -r 'select(.status == "integrated") | .ticket' "$queue" | wc -l | tr -d ' ')"
-  _arbiter_rewrite "$queue" "mark_integrated" "promoted"
 
   local target
   target="$(git -C "$repo_dir" rev-parse HEAD)"

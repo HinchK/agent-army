@@ -234,6 +234,34 @@ class TestCommanderUnit(CommanderHarness):
         with self.assertRaises(commander.DecisionParseError):
             commander.parse_decision_xml(traversal)
 
+    def test_parse_decision_xml_rejects_unsafe_task_ids(self):
+        # task ids are interpolated into anchor/brief paths on the bash side.
+        for bad_id in ("1-../../state", "a/b", ".hidden", "-lead", "x y", "z" * 65):
+            xml = DISPATCH_ABC.replace('<task id="W1-T1"', f'<task id="{bad_id}"')
+            with self.assertRaises(
+                commander.DecisionParseError, msg=f"id {bad_id!r} must be rejected"
+            ):
+                commander.parse_decision_xml(xml)
+        good = DISPATCH_ABC.replace('<task id="W1-T1"', '<task id="W1-T1_ok"')
+        decision = commander.parse_decision_xml(good)
+        self.assertEqual(decision.tasks[0].id, "W1-T1_ok")
+        self.assertTrue(all(commander._TASK_ID_RE.fullmatch(t.id) for t in decision.tasks))
+
+    def test_config_env_plumbs_toml_into_subprocess_env(self):
+        # Values already in the environment (tests, operators) keep precedence;
+        # missing ones are filled from the parsed TOML config.
+        env = commander._config_env(
+            {"army_task_timeout_sec": "77", "army_max_repairs_per_task": "3"},
+            {"PATH": "/bin", "ARMY_TASK_TIMEOUT_SEC": "5"},
+        )
+        self.assertEqual(env["ARMY_TASK_TIMEOUT_SEC"], "5")
+        self.assertEqual(env["ARMY_MAX_REPAIRS_PER_TASK"], "3")
+        env = commander._config_env(
+            {"army_task_timeout_sec": "", "army_max_repairs_per_task": None}, {}
+        )
+        self.assertNotIn("ARMY_TASK_TIMEOUT_SEC", env)
+        self.assertNotIn("ARMY_MAX_REPAIRS_PER_TASK", env)
+
     def test_scan_task_security_boundaries(self):
         task = commander.TaskSpec(
             id="T", objective="run gh pr merge 123", owns=["src/a.py"]

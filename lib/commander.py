@@ -154,6 +154,9 @@ def build_commander_cmd(
 _DECISION_RE = re.compile(r"<commander_decision\b.*?</commander_decision>", re.DOTALL)
 _ENUM_ACTIONS = ("dispatch_wave", "mission_complete", "mission_blocked")
 _ENUM_VERIFY = ("none", "asymmetric")
+# Task ids are interpolated into anchor/brief file paths on the bash side
+# (briefs.sh, supervisor.sh): a '/' or '..' would escape those directories.
+_TASK_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
 def _csv_list(raw: Optional[str]) -> List[str]:
@@ -209,6 +212,11 @@ def parse_decision_xml(stdout: str) -> CommanderDecision:
         )
         if not spec.id:
             raise DecisionParseError("task element missing id")
+        if not _TASK_ID_RE.fullmatch(spec.id):
+            raise DecisionParseError(
+                f"task id {spec.id!r} must be 1-64 chars of [A-Za-z0-9_-] "
+                "starting with an alphanumeric (it is used in file paths)"
+            )
         if not spec.owns:
             raise DecisionParseError(f"task {spec.id} has an empty scope/owns")
         if spec.verify not in _ENUM_VERIFY:
@@ -335,6 +343,26 @@ def _load_config(repo_dir: Path, config_path: Path, overrides: Dict[str, Any]) -
     cfg.update({k.lower(): v for k, v in (overrides or {}).items()})
     cfg["slug"] = _slug_from_state(repo_dir)
     return cfg
+
+
+def _config_env(cfg: Dict[str, Any], env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Merges operator TOML config into the subprocess environment.
+
+    lib/supervisor.sh and lib/arbiter.sh read ARMY_TASK_TIMEOUT_SEC and
+    ARMY_MAX_REPAIRS_PER_TASK from their process env; without this merge the
+    `army run` path silently ran every worker task on the hardwired defaults
+    no matter what the operator wrote in army.config.toml. Values already
+    present in the environment (tests, operators) keep precedence.
+    """
+    merged = dict(os.environ if env is None else env)
+    for cfg_key, env_key in (
+        ("army_task_timeout_sec", "ARMY_TASK_TIMEOUT_SEC"),
+        ("army_max_repairs_per_task", "ARMY_MAX_REPAIRS_PER_TASK"),
+    ):
+        value = str(cfg.get(cfg_key, "") or "")
+        if value and env_key not in merged:
+            merged[env_key] = value
+    return merged
 
 
 def _bash(script: str, args: List[str], env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
@@ -709,7 +737,19 @@ def drain_and_promote(
         if proc.returncode == 0:
             promote = _bash("arbiter.sh", ["promote", str(repo_dir), "--confirm"], env)
             if promote.returncode != 0:
-                return "error", f"arbiter promote failed: {promote.stderr.strip()}"
+                # main may already have fast-forwarded by now; never fail as a
+                # bare exit 1 — the operator needs the structured handoff.
+                write_handoff(
+                    repo_dir,
+                    "PROMOTE_FAILED",
+                    f"arbiter promote failed: {promote.stderr.strip()}",
+                    "Inspect the promote error (often an idle seat worktree left dirty, "
+                    "which blocks worktree_sync_pool). Snapshot the seat if it holds work, "
+                    "clean it, then run army resume.",
+                    state,
+                )
+                _save_state(state_dir, state)
+                return "blocked", "PROMOTE_FAILED"
             count = 0
             for line in promote.stdout.strip().splitlines():
                 if line.strip().isdigit():
@@ -903,6 +943,7 @@ def run_mission(
         state["mission_file"] = str(mission_file)
         _save_state(state_dir, state)
         cfg = _load_config(repo_dir, config_path, overrides or {})
+        env = _config_env(cfg, env)
 
         if not _bash_ok("lifecycle.sh", ["up", str(repo_dir), str(config_path)], env):
             return EXIT_ERROR
@@ -948,7 +989,7 @@ def run_mission(
                 _save_state(state_dir, state)
 
             if not tasks:
-                decision = _wake_commander(repo_dir, cfg, state, mission_file)
+                decision = _wake_commander(repo_dir, cfg, state, mission_file, env=env)
                 if decision.action == "mission_blocked":
                     write_handoff(
                         repo_dir,
@@ -1061,7 +1102,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 overrides["commander_harness"] = args.commander
             if args.model:
                 overrides["commander_model"] = args.model
-            return run_mission(repo, Path(args.mission), config, overrides)
+            # Resolve now: army resume re-reads this path from state.json from
+            # whatever cwd it is launched in.
+            return run_mission(repo, Path(args.mission).resolve(), config, overrides)
         return resume_mission(repo, config)
     except ArmyLockError as exc:
         print(f"error: {exc}", file=sys.stderr)

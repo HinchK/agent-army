@@ -50,8 +50,12 @@ ANCHOR_LINE_RE='^[[:space:]]*(WORKER DONE|WORKER BLOCKED|VERIFIER PASS|VERIFIER 
 
 # supervisor_read_anchor <worktree_dir> <anchor_relpath> <prompt_ts_file> <agent_name>
 # Prints the harvested anchor line. Ignores the file when it is missing or its
-# mtime is older than the prompt that started the attempt; a missing file gets
-# exactly one `herdr agent read` fallback.
+# mtime is older than the marker that started the attempt; a missing file gets
+# exactly one `herdr agent read` fallback. The marker file holds
+# "<epoch-seconds[.fraction]> <nonce>": the nonce uniquifies each attempt and
+# the sub-second precision is what rejects a stale anchor written back within
+# the same 1-second mtime tick. Integer-only markers from older runs still
+# parse.
 supervisor_read_anchor() {
   local worktree_dir="$1"
   local anchor_relpath="$2"
@@ -61,19 +65,29 @@ supervisor_read_anchor() {
   local anchor="$worktree_dir/$anchor_relpath"
   if [ -e "$anchor" ]; then
     resolve_python
-    local mtime prompt_ts
-    mtime="$("$PYTHON_BIN" -c 'import os,sys; print(int(os.path.getmtime(sys.argv[1])))' "$anchor")"
-    prompt_ts="$(cat "$prompt_ts_file" 2>/dev/null || printf '0')"
-    case "$prompt_ts" in
-      ''|*[!0-9]*) prompt_ts=0 ;;
-    esac
-    if [ "$mtime" -ge "$prompt_ts" ]; then
-      local line
-      line="$(grep -E "$ANCHOR_LINE_RE" "$anchor" | tail -n 1 || true)"
-      if [ -n "$line" ]; then
-        printf '%s\n' "$line"
-        return 0
-      fi
+    if ! "$PYTHON_BIN" - "$anchor" "$prompt_ts_file" <<'PY'
+import os
+import sys
+
+try:
+    anchor_mtime = os.stat(sys.argv[1]).st_mtime
+except OSError:
+    sys.exit(1)
+try:
+    marker = open(sys.argv[2]).read().split()[0]
+    prompt_ts = float(marker)
+except (OSError, IndexError, ValueError):
+    prompt_ts = 0.0
+sys.exit(0 if anchor_mtime >= prompt_ts else 1)
+PY
+    then
+      return 1
+    fi
+    local line
+    line="$(grep -E "$ANCHOR_LINE_RE" "$anchor" | tail -n 1 || true)"
+    if [ -n "$line" ]; then
+      printf '%s\n' "$line"
+      return 0
     fi
     return 1
   fi
@@ -173,7 +187,10 @@ supervisor_scan_secrets() {
       fi
     fi
 
-    if git -C "$repo_dir" cat-file -p "$oid" | grep -a -q -E -e "$secret_regex"; then
+    # No grep -q here: -q exits at the first match and SIGPIPEs cat-file once
+    # the blob exceeds the pipe buffer, which fails OPEN under pipefail. A
+    # plain grep with discarded stdout consumes the whole stream instead.
+    if git -C "$repo_dir" cat-file -p "$oid" | grep -a -E -e "$secret_regex" >/dev/null; then
       printf 'supervisor_scan_secrets: secret pattern in blob %s (%s)\n' "$oid" "$path" >&2
       return 20
     fi
@@ -301,7 +318,9 @@ supervisor_gate_commit() {
 
   # 2. workflow files are a GITHUB_MAIN boundary unless explicitly owned
   if ! printf ',%s,' "$owns_csv" | grep -qF ',.github/workflows,'; then
-    if git -C "$repo_dir" diff --name-only "${base_ref}...${sha}" | grep -qE '^\.github/workflows/'; then
+    # No grep -q on the git pipe: the path list can exceed the pipe buffer on
+    # large diffs and SIGPIPE would fail this boundary check OPEN.
+    if git -C "$repo_dir" diff --name-only "${base_ref}...${sha}" | grep -E '^\.github/workflows/' >/dev/null; then
       _supervisor_telemetry "$repo_dir" "task_blocked" "$seat" "$task_id" '{"boundary":"GITHUB_MAIN","reason":"workflow_touch"}'
       printf 'BLOCKED:GITHUB_MAIN:workflow_touch\n'
       return 2
@@ -310,7 +329,9 @@ supervisor_gate_commit() {
 
   # 3. all-blob secret scan from the integration tip to the sha
   local scan_rc=0 scan_err
-  scan_err="$(supervisor_scan_secrets "$repo_dir" "refs/heads/$slug/integration" "$sha" 2>&1 >/dev/null)" || scan_rc=$?
+  # Must match _arbiter_ref's naming (refs/heads/army/<slug>/integration): a
+  # mistyped ref makes rev-list fail silently and the scan pass vacuously.
+  scan_err="$(supervisor_scan_secrets "$repo_dir" "refs/heads/army/$slug/integration" "$sha" 2>&1 >/dev/null)" || scan_rc=$?
   if [ "$scan_rc" = "20" ]; then
     _supervisor_telemetry "$repo_dir" "task_blocked" "$seat" "$task_id" "{\"boundary\":\"SECRET\",\"reason\":\"$(printf '%s' "$scan_err" | tail -n 1)\"}"
     printf 'BLOCKED:SECRET:%s\n' "$(printf '%s' "$scan_err" | tail -n 1)"
@@ -434,6 +455,24 @@ _sup_terminal() {
   wt="$(jq -r --arg s "$seat" '.seats[$s].worktree_dir // empty' "$repo_dir/.agent-army/seats.json" 2>/dev/null || true)"
   if [ -n "$wt" ]; then
     briefs_clear_active_task "$wt"
+    # Recycle the seat so a terminal RED/BLOCKED cannot poison later waves:
+    # snapshot any dirt, then hard-reset the seat branch to the integration
+    # tip. Without this the failed attempt's commit stays on the seat branch,
+    # gets rebased onto the next promote, and makes every later task on the
+    # seat fail partition_check_diff_in_owns with RED:owns_or_drift; a dirty
+    # seat would likewise make every later worktree_sync_pool (and therefore
+    # arbiter_promote) fail.
+    local slug tip
+    slug="$(state_read_slug "$repo_dir")"
+    if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/army/$slug/integration"; then
+      tip="refs/heads/army/$slug/integration"
+    else
+      tip="HEAD"
+    fi
+    if [ -n "$(git -C "$wt" status --porcelain)" ]; then
+      worktree_snapshot "$repo_dir" "$seat" >/dev/null 2>&1 || true
+    fi
+    git -C "$wt" reset --hard "$(git -C "$repo_dir" rev-parse "$tip")" >/dev/null 2>&1 || true
   fi
 }
 
@@ -543,7 +582,10 @@ _supervisor_step_task() {
   if [ -f "$ts_file" ]; then
     local now ts
     now="$(date +%s)"
+    # Marker is "<epoch[.frac]> <nonce>"; the clock only needs whole seconds.
     ts="$(cat "$ts_file" 2>/dev/null || printf '0')"
+    ts="${ts%% *}"
+    ts="${ts%%.*}"
     case "$ts" in
       ''|*[!0-9]*) return 0 ;;
     esac

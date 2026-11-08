@@ -55,8 +55,8 @@ source "$ROOT_DIR/lib/lifecycle.sh"
 swarm_up "$REPO" "$REPO/army.config.toml"
 
 BASE="$(git -C "$REPO" rev-parse HEAD)"
-git -C "$REPO" update-ref "refs/heads/$SLUG/integration" "$BASE"
-INTEGRATION="refs/heads/$SLUG/integration"
+git -C "$REPO" update-ref "refs/heads/army/$SLUG/integration" "$BASE"
+INTEGRATION="refs/heads/army/$SLUG/integration"
 
 
 echo "=== Test 1: secret added in an intermediate commit and deleted in the tip still blocks ==="
@@ -128,6 +128,49 @@ ENVEX_SHA="$(git -C "$REPO" rev-parse HEAD)"
 git -C "$REPO" checkout -q main
 if ! supervisor_scan_secrets "$REPO" "$INTEGRATION" "$ENVEX_SHA" >/dev/null 2>&1; then
   echo "FAIL: .env.example alone must not block" >&2
+  exit 1
+fi
+
+echo "=== Test 2c: secret in the first line of a >64KB blob is caught (grep -q SIGPIPE regression) ==="
+# grep -q exits at the first match; on a blob larger than the pipe buffer the
+# early exit SIGPIPEs cat-file under pipefail and the old code failed OPEN.
+git -C "$REPO" checkout -q --detach "$CLEAN_SHA"
+{ printf 'ghp_AAAAABBBBBCCCCCDDDDDEEEEEFFFFFGGGGG\n'; head -c 200000 /dev/zero | tr '\0' 'x'; } > "$REPO/big.bundle"
+git -C "$REPO" add big.bundle
+git -C "$REPO" commit -q -m "big bundle with early secret"
+BIG_SHA="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" checkout -q main
+SCAN_RC=0
+supervisor_scan_secrets "$REPO" "$INTEGRATION" "$BIG_SHA" >/dev/null 2>&1 || SCAN_RC=$?
+if [ "$SCAN_RC" -ne 20 ]; then
+  echo "FAIL: secret at the head of a >64KB blob must return 20, got $SCAN_RC" >&2
+  exit 1
+fi
+# Same oversized blob without the secret must stay clean (full-stream grep).
+git -C "$REPO" checkout -q --detach "$CLEAN_SHA"
+head -c 200000 /dev/zero | tr '\0' 'x' > "$REPO/big-clean.bundle"
+git -C "$REPO" add big-clean.bundle
+git -C "$REPO" commit -q -m "big clean bundle"
+BIGCLEAN_SHA="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" checkout -q main
+if ! supervisor_scan_secrets "$REPO" "$INTEGRATION" "$BIGCLEAN_SHA" >/dev/null 2>&1; then
+  echo "FAIL: clean >64KB blob must not block" >&2
+  exit 1
+fi
+
+echo "=== Test 2d: dispatch refuses a task id that could escape anchor paths ==="
+# Guards fire before any file side effects, so /dev/null is a safe brief src.
+if briefs_dispatch_task "$REPO" "worker_1" "9" '../../escape' /dev/null 2>/dev/null; then
+  echo "FAIL: briefs_dispatch_task must reject a traversal task id" >&2
+  exit 1
+fi
+if briefs_dispatch_verifier "$REPO" "9" 'a/b' /dev/null 2>/dev/null; then
+  echo "FAIL: briefs_dispatch_verifier must reject a path-bearing task id" >&2
+  exit 1
+fi
+if compgen -G "$REPO/.agent-army/worktrees/worker_1/.agent-army/anchors/*escape*" >/dev/null \
+  || [ -e "$REPO/escape.txt" ]; then
+  echo "FAIL: rejected task id must not create files" >&2
   exit 1
 fi
 

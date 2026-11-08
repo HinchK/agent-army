@@ -56,8 +56,8 @@ swarm_up "$REPO" "$REPO/army.config.toml"
 W1_WT="$(jq -r '.seats.worker_1.worktree_dir' "$REPO/.agent-army/seats.json")"
 
 BASE="$(git -C "$REPO" rev-parse HEAD)"
-git -C "$REPO" update-ref "refs/heads/$SLUG/integration" "$BASE"
-INTEGRATION="refs/heads/$SLUG/integration"
+git -C "$REPO" update-ref "refs/heads/army/$SLUG/integration" "$BASE"
+INTEGRATION="refs/heads/army/$SLUG/integration"
 
 CALLS="$MOCK_DIR/calls.log"
 
@@ -118,6 +118,54 @@ case "$LINE" in
     ;;
 esac
 rm -rf "$MOCK_DIR/read"
+
+echo "=== Test 1c: same-second stale anchor rejected by the sub-second nonce marker [Review Focus #4] ==="
+# Anchor written at T.<f2>, marker recorded at T.<f3> in the SAME integer
+# second with f3 > f2: second-truncated comparison accepts it (T >= T), the
+# float marker must reject it.
+resolve_python
+if ! "$PYTHON_BIN" - "$W1_WT/.agent-army/anchors/T1C.txt" <<'PY'
+import os
+import sys
+import time
+
+anchor = sys.argv[1]
+marker = os.path.join(os.path.dirname(anchor), "T1C.prompt_ts")
+line = "WORKER DONE #T1C 4444444444444444444444444444444444444444"
+mtime = 0.0
+for _ in range(50):
+    with open(anchor, "w", encoding="utf-8") as f:
+        f.write(line + "\n")
+    mtime = os.stat(anchor).st_mtime
+    if (mtime % 1) < 0.7:
+        break
+    time.sleep(0.05)
+else:
+    sys.exit(3)
+stale_marker = mtime + 0.15  # strictly later, same integer second
+if int(stale_marker) != int(mtime):
+    sys.exit(3)
+with open(marker, "w", encoding="utf-8") as f:
+    f.write("%.6f nonce-stale\n" % stale_marker)
+PY
+then
+  echo "FAIL: same-second fixture setup failed" >&2
+  exit 1
+fi
+if LINE="$(supervisor_read_anchor "$W1_WT" ".agent-army/anchors/T1C.txt" "$W1_WT/.agent-army/anchors/T1C.prompt_ts" "worker_1-$SLUG")"; then
+  echo "FAIL: same-second stale anchor was harvested: $LINE" >&2
+  exit 1
+fi
+# Control: an anchor written after the marker is accepted.
+sleep 0.3  # clear the +0.15s marker window deterministically
+FRESH_LINE_C='WORKER DONE #T1C 5555555555555555555555555555555555555555'
+printf '%s\n' "$FRESH_LINE_C" > "$W1_WT/.agent-army/anchors/T1C.txt"
+LINE="$(supervisor_read_anchor "$W1_WT" ".agent-army/anchors/T1C.txt" "$W1_WT/.agent-army/anchors/T1C.prompt_ts" "worker_1-$SLUG")"
+if [ "$LINE" != "$FRESH_LINE_C" ]; then
+  echo "FAIL: fresh anchor after the nonce marker not read back: '$LINE'" >&2
+  exit 1
+fi
+rm -f "$W1_WT/.agent-army/anchors/T1C.txt" "$W1_WT/.agent-army/anchors/T1C.prompt_ts"
 
 echo "=== Test 2: flake rerun — fail on attempt 1, pass on attempt 2 => GREEN, no repair ==="
 FLAKE_COUNTER="$TMP_ROOT/flake-counter"
@@ -209,6 +257,18 @@ case "$REASON" in
     exit 1
     ;;
 esac
+
+echo "=== Test 4b: terminal RED recycles the seat (branch reset to integration tip, tree clean) ==="
+INT_TIP_T4="$(git -C "$REPO" rev-parse "$INTEGRATION")"
+W1_HEAD_T4="$(git -C "$W1_WT" rev-parse HEAD)"
+if [ "$W1_HEAD_T4" != "$INT_TIP_T4" ]; then
+  echo "FAIL: seat branch must be reset to the integration tip after terminal RED (head $W1_HEAD_T4, tip $INT_TIP_T4)" >&2
+  exit 1
+fi
+if [ -n "$(git -C "$W1_WT" status --porcelain)" ]; then
+  echo "FAIL: terminal RED must leave the seat worktree clean" >&2
+  exit 1
+fi
 
 echo "=== Test 5: task timeout — first expiry re-dispatches once, second blocks ==="
 export ARMY_TASK_TIMEOUT_SEC=1

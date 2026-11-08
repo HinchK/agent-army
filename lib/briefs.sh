@@ -11,14 +11,26 @@ source "$_BRIEFS_DIR/worktree.sh"
 # shellcheck source=lib/providers.sh disable=SC1091
 source "$_BRIEFS_DIR/providers.sh"
 
+# _briefs_write_prompt_marker <prompt_ts_file>
+# Records "<epoch-seconds.fraction> <nonce>". The nonce uniquifies each
+# attempt; the sub-second timestamp lets supervisor_read_anchor reject an
+# anchor written back within the same 1-second mtime tick. Written AFTER the
+# fresh agent session starts (previous attempt's agent already interrupted),
+# so no stale agent can produce an anchor newer than the marker.
+_briefs_write_prompt_marker() {
+  resolve_python
+  "$PYTHON_BIN" -c 'import secrets, time; print("%.6f %s" % (time.time(), secrets.token_hex(4)))' > "$1"
+}
+
 # briefs_dispatch_task <repo_dir> <seat> <wave> <task_id> <xml_file_src>
 #
-# Exact seating order per dispatch:
+# Seating order per dispatch:
 #   1. rm -f the seat's stale anchor file
-#   2. write .active_task + <task_id>.prompt_ts (epoch seconds)
+#   2. write .active_task
 #   3. copy the brief into <worktree>/.agent-army/briefs/<wave>-<task_id>.xml
 #   4. snapshot the pre-task worktree state (best effort, dirty only)
-#   5. start a fresh agent session on the existing pane
+#   5. start a fresh agent session on the existing pane (interrupts any
+#      previous attempt first), THEN record the nonce prompt marker
 #   6. herdr agent prompt <seat>-<slug> with a <200 byte file-path prompt
 #   7. sleep ARMY_SUBMIT_DELAY (default 1) && herdr agent send-keys <target> enter
 briefs_dispatch_task() {
@@ -27,6 +39,15 @@ briefs_dispatch_task() {
   local wave="$3"
   local task_id="$4"
   local xml_src="$5"
+
+  # task_id is interpolated into anchor/brief paths: reject anything outside
+  # [A-Za-z0-9_-] (path traversal, hidden files, separators) fail-closed.
+  case "$task_id" in
+    ''|*[!A-Za-z0-9_-]*)
+      log_error "briefs_dispatch_task: invalid task id '$task_id' (need [A-Za-z0-9_-])"
+      return 1
+      ;;
+  esac
 
   local slug
   slug="$(state_read_slug "$repo_dir")"
@@ -46,7 +67,6 @@ briefs_dispatch_task() {
   mkdir -p "$anchors_dir" "$briefs_dir"
 
   rm -f "$anchors_dir/${task_id}.txt"
-  printf '%s\n' "$(date +%s)" > "$anchors_dir/${task_id}.prompt_ts"
   printf '%s\n' "$task_id" > "$worktree_dir/.agent-army/.active_task"
   cp "$xml_src" "$briefs_dir/${wave}-${task_id}.xml"
 
@@ -56,6 +76,7 @@ briefs_dispatch_task() {
 
   providers_prepare_seat "$worktree_dir" "$kind" "$model"
   providers_start_fresh_session "$repo_dir" "$seat" "$pane_id" "$kind" "$model"
+  _briefs_write_prompt_marker "$anchors_dir/${task_id}.prompt_ts"
   providers_submit_prompt "${seat}-${slug}" "Read .agent-army/briefs/${wave}-${task_id}.xml, execute the task within scope, commit your work, and write the completion anchor file."
 }
 
@@ -66,6 +87,14 @@ briefs_dispatch_verifier() {
   local wave="$2"
   local task_id="$3"
   local verify_xml_src="$4"
+
+  # Same charset guard as briefs_dispatch_task: the id reaches anchor paths.
+  case "$task_id" in
+    ''|*[!A-Za-z0-9_-]*)
+      log_error "briefs_dispatch_verifier: invalid task id '$task_id' (need [A-Za-z0-9_-])"
+      return 1
+      ;;
+  esac
 
   local slug
   slug="$(state_read_slug "$repo_dir")"
@@ -85,12 +114,12 @@ briefs_dispatch_verifier() {
   mkdir -p "$anchors_dir" "$briefs_dir"
 
   rm -f "$anchors_dir/${task_id}.verify.txt"
-  printf '%s\n' "$(date +%s)" > "$anchors_dir/${task_id}.verify.prompt_ts"
   printf '%s\n' "$task_id" > "$worktree_dir/.agent-army/.active_task"
   cp "$verify_xml_src" "$briefs_dir/${wave}-${task_id}-verify.xml"
 
   providers_prepare_seat "$worktree_dir" "$kind" "$model"
   providers_start_fresh_session "$repo_dir" "verifier" "$pane_id" "$kind" "$model"
+  _briefs_write_prompt_marker "$anchors_dir/${task_id}.verify.prompt_ts"
   providers_submit_prompt "verifier-${slug}" "Read .agent-army/briefs/${wave}-${task_id}-verify.xml, audit the commit diff, and write the verifier anchor file."
 }
 

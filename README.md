@@ -71,7 +71,7 @@ woken again, so wave *N+1* always branches from the newly integrated local
 3. `SUPERVISE_WAVE` — anchors (mtime-guarded) + `TEST_CMD` + verifier + secret
    scan; one automatic flake rerun before a red counts; one repair turn per
    task; task-clock timeout re-dispatches once, then blocks with a snapshot.
-4. `ARBITER_DRAIN_AND_PROMOTE` — cherry-pick queued SHAs onto the integration
+4. `ARBITER_DRAIN_AND_PROMOTE` — merge queued SHAs onto the integration
    ref in a detached worktree, gate the combined tree under `env -i CI=true`,
    CAS-update the ref, fast-forward **local** `main`, release leases, and
    sync idle worktrees. Conflicts/integration-red wake the Commander for

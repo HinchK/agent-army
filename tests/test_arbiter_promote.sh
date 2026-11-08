@@ -235,4 +235,23 @@ fi
 git -C "$REPO" checkout -q main
 git -C "$REPO" branch -q -D side-branch
 
+echo "=== Test 9: enqueue refuses to touch the queue while the arbiter lock is held ==="
+QUEUE_FILE="$REPO/.agent-army/integration.jsonl"
+QUEUE_BEFORE="$(cat "$QUEUE_FILE" 2>/dev/null || printf '')"
+mkdir -p "$REPO/.agent-army/arbiter.lock"
+printf '%s\n' $$ > "$REPO/.agent-army/arbiter.lock/pid"   # this shell is alive: not stale
+if ARBITER_LOCK_WAIT_TRIES=1 ARBITER_LOCK_POLL_SEC=0.01 \
+  arbiter_enqueue "$REPO" "LK-T1" "worker_1" "0000000000000000000000000000000000000000" 2>/dev/null; then
+  echo "FAIL: enqueue must fail while a live drain holds the arbiter lock" >&2
+  exit 1
+fi
+QUEUE_AFTER="$(cat "$QUEUE_FILE" 2>/dev/null || printf '')"
+if [ "$QUEUE_AFTER" != "$QUEUE_BEFORE" ]; then
+  echo "FAIL: a lock-rejected enqueue must leave the queue untouched" >&2
+  exit 1
+fi
+rm -rf "$REPO/.agent-army/arbiter.lock"
+arbiter_enqueue "$REPO" "LK-T1" "worker_1" "0000000000000000000000000000000000000000"
+tail -n 1 "$QUEUE_FILE" | jq -e --arg t "LK-T1" '.ticket == $t and .status == "queued"' >/dev/null
+
 echo "PASS: test_arbiter_promote.sh"
