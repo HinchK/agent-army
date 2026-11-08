@@ -295,8 +295,18 @@ if [ ! -f "$ANCHORS/W1-T1.prompt_ts" ]; then
   echo "FAIL: briefs_dispatch_task did not write W1-T1.prompt_ts" >&2
   exit 1
 fi
+# Marker format is "<epoch-seconds[.fraction]> <nonce>": compare whole
+# seconds only, and fail closed if the marker is not parseable as such.
 PROMPT_TS="$(cat "$ANCHORS/W1-T1.prompt_ts")"
-if [ "$PROMPT_TS" -lt "$BEFORE_TS" ]; then
+PROMPT_EPOCH="${PROMPT_TS%% *}"
+PROMPT_EPOCH="${PROMPT_EPOCH%%.*}"
+case "$PROMPT_EPOCH" in
+  ''|*[!0-9]*)
+    echo "FAIL: W1-T1.prompt_ts is not an epoch marker: '$PROMPT_TS'" >&2
+    exit 1
+    ;;
+esac
+if [ "$PROMPT_EPOCH" -lt "$BEFORE_TS" ]; then
   echo "FAIL: prompt_ts $PROMPT_TS predates dispatch ($BEFORE_TS)" >&2
   exit 1
 fi
