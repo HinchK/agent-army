@@ -157,3 +157,243 @@ if [ -d "$WT_W2" ]; then
 fi
 
 echo "PASS: test_worktree_sync.sh (worktree section)"
+
+# ---------------------------------------------------------------------------
+# Task 3: seat lifecycle & file-path brief dispatch (mock herdr)
+# ---------------------------------------------------------------------------
+
+# shellcheck source=lib/config.sh disable=SC1091
+source "$ROOT_DIR/lib/config.sh"
+# shellcheck source=lib/lifecycle.sh disable=SC1091
+source "$ROOT_DIR/lib/lifecycle.sh"
+# shellcheck source=lib/briefs.sh disable=SC1091
+source "$ROOT_DIR/lib/briefs.sh"
+
+MOCK_BIN="$TMP_ROOT/mockbin"
+mkdir -p "$MOCK_BIN"
+ln -sf "$ROOT_DIR/tests/mocks/herdr" "$MOCK_BIN/herdr"
+export PATH="$MOCK_BIN:$PATH"
+
+MOCK_DIR="$TMP_ROOT/herdr-mock"
+mkdir -p "$MOCK_DIR"
+export HERDR_MOCK_DIR="$MOCK_DIR"
+
+export ARMY_SUBMIT_DELAY=0
+
+SEAT_REPO="$TMP_ROOT/seat-repo"
+init_test_repo "$SEAT_REPO"
+export HERDR_MOCK_REPO="$SEAT_REPO"
+state_init_slug "$SEAT_REPO" "Seat Project" >/dev/null
+SEAT_SLUG="$(state_read_slug "$SEAT_REPO")"
+cp "$ROOT_DIR/army.config.toml.example" "$SEAT_REPO/army.config.toml"
+
+echo "=== Test 5: swarm_up seats workers in exact order and never creates an ops pane ==="
+GITHUB_TOKEN="gh-token-secret" GH_TOKEN="gh2" AWS_ACCESS_KEY_ID="AKIA123" AWS_SECRET_ACCESS_KEY="s" \
+  swarm_up "$SEAT_REPO" "$SEAT_REPO/army.config.toml"
+
+for seat in worker_1 worker_2 verifier; do
+  if [ ! -d "$SEAT_REPO/.agent-army/worktrees/$seat" ]; then
+    echo "FAIL: swarm_up did not provision a worktree for $seat" >&2
+    exit 1
+  fi
+done
+if [ ! -f "$SEAT_REPO/.agent-army/seats.json" ]; then
+  echo "FAIL: swarm_up did not write seats.json" >&2
+  exit 1
+fi
+SEAT_COUNT="$(jq '.seats | length' "$SEAT_REPO/.agent-army/seats.json")"
+if [ "$SEAT_COUNT" != "3" ]; then
+  echo "FAIL: expected 3 seats in seats.json, got $SEAT_COUNT" >&2
+  exit 1
+fi
+WS_ID="$(jq -r '.workspace_id' "$SEAT_REPO/.agent-army/seats.json")"
+if [ "$WS_ID" != "ws-mock" ]; then
+  echo "FAIL: expected workspace_id 'ws-mock', got '$WS_ID'" >&2
+  exit 1
+fi
+
+CALLS="$MOCK_DIR/calls.log"
+FIRST_SPLIT_LINE="$(grep -n 'pane split' "$CALLS" | head -n 1 | cut -d: -f1)"
+FIRST_START_LINE="$(grep -n 'agent start' "$CALLS" | head -n 1 | cut -d: -f1)"
+if [ -z "$FIRST_SPLIT_LINE" ] || [ -z "$FIRST_START_LINE" ] || [ "$FIRST_SPLIT_LINE" -gt "$FIRST_START_LINE" ]; then
+  echo "FAIL: seating order violated (pane split must precede agent start)" >&2
+  exit 1
+fi
+while IFS= read -r split_line; do
+  split_cwd="$(printf '%s' "$split_line" | sed -nE 's/pane split --cwd (.+) --no-focus.*/\1/p')"
+  case "$split_cwd" in
+    */.agent-army/worktrees/*) ;;
+    *)
+      echo "FAIL: pane split targeted non-worktree cwd '$split_cwd' (ops pane)" >&2
+      exit 1
+      ;;
+  esac
+done < <(grep 'pane split' "$CALLS")
+
+echo "=== Test 6: worker/verifier launches are credential-free ==="
+for seat in worker_1 worker_2 verifier; do
+  ENV_FILE="$MOCK_DIR/env/${seat}-${SEAT_SLUG}.env"
+  if [ ! -f "$ENV_FILE" ]; then
+    echo "FAIL: no captured env for ${seat}-${SEAT_SLUG}" >&2
+    exit 1
+  fi
+  if grep -qE '^(GITHUB_TOKEN|GH_TOKEN|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)=' "$ENV_FILE"; then
+    echo "FAIL: ${seat} agent env still carries credentials" >&2
+    exit 1
+  fi
+  for required in AWS_SHARED_CREDENTIALS_FILE GOOGLE_APPLICATION_CREDENTIALS CLOUDSDK_CONFIG; do
+    if ! grep -q "^${required}=/nonexistent$" "$ENV_FILE"; then
+      echo "FAIL: ${seat} agent env missing ${required}=/nonexistent" >&2
+      exit 1
+    fi
+  done
+done
+
+echo "=== Test 7: swarm_verify_seats fails closed when a critical seat is missing ==="
+swarm_verify_seats "$SEAT_REPO" "$SEAT_REPO/army.config.toml"
+
+jq '.seats |= del(.verifier)' "$SEAT_REPO/.agent-army/seats.json" > "$MOCK_DIR/seats.tmp"
+mv "$MOCK_DIR/seats.tmp" "$SEAT_REPO/.agent-army/seats.json"
+if swarm_verify_seats "$SEAT_REPO" "$SEAT_REPO/army.config.toml" >/dev/null 2>&1; then
+  echo "FAIL: swarm_verify_seats must fail when the critical verifier seat is missing" >&2
+  exit 1
+fi
+swarm_up "$SEAT_REPO" "$SEAT_REPO/army.config.toml"
+swarm_verify_seats "$SEAT_REPO" "$SEAT_REPO/army.config.toml"
+
+echo "=== Test 8: briefs_dispatch_task fresh session, anchor deletion, prompt_ts, short prompt ==="
+WORKTREE_W1="$(jq -r '.seats.worker_1.worktree_dir' "$SEAT_REPO/.agent-army/seats.json")"
+ANCHORS="$WORKTREE_W1/.agent-army/anchors"
+mkdir -p "$ANCHORS" "$SEAT_REPO/.agent-army/briefs"
+printf 'WORKER DONE #W1-T1 stalesha0000000000000000000000000000\n' > "$ANCHORS/W1-T1.txt"
+touch -t 202001010000 "$ANCHORS/W1-T1.txt"
+BEFORE_STARTS="$(grep -c 'agent start worker_1-' "$CALLS" || true)"
+
+cat > "$SEAT_REPO/.agent-army/briefs/src-W1-T1.xml" <<'EOF'
+<task_brief id="W1-T1" wave="1" seat="worker_1" verify="none">
+  <role>Test engineer.</role>
+  <objective>Do mock work.</objective>
+  <scope><read>README.md</read><owns>src/feature.py</owns></scope>
+  <gates><done_criteria>mock</done_criteria></gates>
+</task_brief>
+EOF
+
+# silent mode: the mock worker writes nothing, so the stale-anchor deletion
+# is observable directly (a live worker would recreate the anchor immediately).
+mkdir -p "$MOCK_DIR/worker-mode"
+printf 'silent\n' > "$MOCK_DIR/worker-mode/W1-T1"
+
+BEFORE_TS="$(date +%s)"
+sleep 1
+briefs_dispatch_task "$SEAT_REPO" "worker_1" "1" "W1-T1" "$SEAT_REPO/.agent-army/briefs/src-W1-T1.xml"
+
+if [ -e "$ANCHORS/W1-T1.txt" ]; then
+  echo "FAIL: briefs_dispatch_task must delete the stale anchor file before prompting" >&2
+  exit 1
+fi
+if [ ! -f "$ANCHORS/W1-T1.prompt_ts" ]; then
+  echo "FAIL: briefs_dispatch_task did not write W1-T1.prompt_ts" >&2
+  exit 1
+fi
+PROMPT_TS="$(cat "$ANCHORS/W1-T1.prompt_ts")"
+if [ "$PROMPT_TS" -lt "$BEFORE_TS" ]; then
+  echo "FAIL: prompt_ts $PROMPT_TS predates dispatch ($BEFORE_TS)" >&2
+  exit 1
+fi
+if [ ! -f "$WORKTREE_W1/.agent-army/briefs/1-W1-T1.xml" ]; then
+  echo "FAIL: brief was not copied into the worktree" >&2
+  exit 1
+fi
+if [ ! -e "$WORKTREE_W1/.agent-army/.active_task" ]; then
+  echo "FAIL: briefs_dispatch_task did not mark the seat active" >&2
+  exit 1
+fi
+AFTER_STARTS="$(grep -c 'agent start worker_1-' "$CALLS" || true)"
+if [ "$AFTER_STARTS" -ne $((BEFORE_STARTS + 1)) ]; then
+  echo "FAIL: expected one fresh agent session ($BEFORE_STARTS -> $AFTER_STARTS)" >&2
+  exit 1
+fi
+
+LAST_PROMPT="$(grep 'agent prompt worker_1-' "$CALLS" | tail -n 1)"
+PROMPT_TEXT="${LAST_PROMPT#* :: }"
+PROMPT_BYTES="$(printf '%s' "$PROMPT_TEXT" | wc -c | tr -d ' ')"
+if [ "$PROMPT_BYTES" -ge 200 ]; then
+  echo "FAIL: dispatched prompt is $PROMPT_BYTES bytes (>=200); raw XML must never be pasted" >&2
+  exit 1
+fi
+case "$PROMPT_TEXT" in
+  "Read .agent-army/briefs/1-W1-T1.xml,"*) ;;
+  *)
+    echo "FAIL: unexpected prompt text: $PROMPT_TEXT" >&2
+    exit 1
+    ;;
+esac
+
+echo "=== Test 9: providers_submit_prompt rejects prompts >= 200 bytes ==="
+LONG_PROMPT="$(head -c 250 /dev/zero | tr '\0' 'x')"
+if providers_submit_prompt "worker_1-$SEAT_SLUG" "$LONG_PROMPT" >/dev/null 2>&1; then
+  echo "FAIL: providers_submit_prompt accepted a >=200 byte prompt" >&2
+  exit 1
+fi
+
+echo "=== Test 10: briefs_dispatch_verifier uses the verify anchor namespace ==="
+VER_WT="$(jq -r '.seats.verifier.worktree_dir' "$SEAT_REPO/.agent-army/seats.json")"
+mkdir -p "$VER_WT/.agent-army/anchors" "$SEAT_REPO/.agent-army/briefs"
+printf 'VERIFIER PASS #W1-T1 stalesha\n' > "$VER_WT/.agent-army/anchors/W1-T1.verify.txt"
+touch -t 202001010000 "$VER_WT/.agent-army/anchors/W1-T1.verify.txt"
+cat > "$SEAT_REPO/.agent-army/briefs/src-W1-T1-verify.xml" <<'EOF'
+<verifier_brief id="W1-T1"><objective>audit</objective></verifier_brief>
+EOF
+printf 'silent\n' > "$MOCK_DIR/verifier-mode"
+briefs_dispatch_verifier "$SEAT_REPO" "1" "W1-T1" "$SEAT_REPO/.agent-army/briefs/src-W1-T1-verify.xml"
+printf 'active\n' > "$MOCK_DIR/verifier-mode"
+if [ -e "$VER_WT/.agent-army/anchors/W1-T1.verify.txt" ]; then
+  echo "FAIL: verifier dispatch must delete the stale verify anchor" >&2
+  exit 1
+fi
+if [ ! -f "$VER_WT/.agent-army/anchors/W1-T1.verify.prompt_ts" ]; then
+  echo "FAIL: verifier dispatch must write W1-T1.verify.prompt_ts" >&2
+  exit 1
+fi
+if [ ! -f "$VER_WT/.agent-army/briefs/1-W1-T1-verify.xml" ]; then
+  echo "FAIL: verifier brief was not copied into the verifier worktree" >&2
+  exit 1
+fi
+LAST_VPROMPT="$(grep 'agent prompt verifier-' "$CALLS" | tail -n 1)"
+case "${LAST_VPROMPT#* :: }" in
+  "Read .agent-army/briefs/1-W1-T1-verify.xml,"*) ;;
+  *)
+    echo "FAIL: unexpected verifier prompt: $LAST_VPROMPT" >&2
+    exit 1
+    ;;
+esac
+
+echo "=== Test 11: swarm_down closes recorded panes and snapshots dirty worktrees ==="
+echo "dirty worktree" >> "$WORKTREE_W1/README.md"
+PANE_IDS="$(jq -r '.seats | to_entries[] | .value.pane_id' "$SEAT_REPO/.agent-army/seats.json")"
+CLOSES_BEFORE="$(grep -c 'pane close' "$CALLS" || true)"
+SNAP_DIR="$SEAT_REPO/.agent-army/snapshots"
+mkdir -p "$SNAP_DIR"
+W1_SNAPS_BEFORE="$(find "$SNAP_DIR" -type d -name worker_1 2>/dev/null | wc -l | tr -d ' ')"
+swarm_down "$SEAT_REPO"
+CLOSES_AFTER="$(grep -c 'pane close' "$CALLS" || true)"
+if [ "$CLOSES_AFTER" -ne $((CLOSES_BEFORE + 3)) ]; then
+  echo "FAIL: swarm_down closed $((CLOSES_AFTER - CLOSES_BEFORE)) panes, expected 3" >&2
+  exit 1
+fi
+W1_SNAPS_AFTER="$(find "$SNAP_DIR" -type d -name worker_1 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$W1_SNAPS_AFTER" -le "$W1_SNAPS_BEFORE" ]; then
+  echo "FAIL: swarm_down did not snapshot the dirty worker_1 worktree" >&2
+  exit 1
+fi
+CLOSED_PANES="$(grep 'pane close' "$CALLS" | awk '{print $3}' | tail -n 3)"
+for pane in $PANE_IDS; do
+  if ! printf '%s\n' "$CLOSED_PANES" | grep -qF "$pane"; then
+    echo "FAIL: swarm_down did not close recorded pane $pane" >&2
+    exit 1
+  fi
+done
+git -C "$WORKTREE_W1" checkout -- README.md
+
+echo "PASS: test_worktree_sync.sh (seat lifecycle section)"
+

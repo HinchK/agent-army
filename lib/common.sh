@@ -80,8 +80,12 @@ state_read_slug() {
   printf '%s\n' "$slug"
 }
 
-ensure_git_exclude() {
+# git_exclude_ensure <repo_dir> <pattern>
+# Idempotently appends <pattern> to the shared .git/info/exclude (the common
+# git dir is shared by every linked worktree, so one write covers all seats).
+git_exclude_ensure() {
   local repo_dir="$1"
+  local pattern="$2"
   local common_dir
   common_dir="$(git -C "$repo_dir" rev-parse --git-common-dir)"
   case "$common_dir" in
@@ -92,12 +96,16 @@ ensure_git_exclude() {
   mkdir -p "$(dirname "$exclude_file")"
   touch "$exclude_file"
 
-  if ! grep -qxF '.agent-army/' "$exclude_file" 2>/dev/null; then
+  if ! grep -qxF "$pattern" "$exclude_file" 2>/dev/null; then
     if [ -s "$exclude_file" ] && [ "$(tail -c 1 "$exclude_file" | wc -l | tr -d ' ')" -eq 0 ]; then
       printf '\n' >> "$exclude_file"
     fi
-    printf '.agent-army/\n' >> "$exclude_file"
+    printf '%s\n' "$pattern" >> "$exclude_file"
   fi
+}
+
+ensure_git_exclude() {
+  git_exclude_ensure "$1" '.agent-army/'
 }
 
 clean_gate_exec() {

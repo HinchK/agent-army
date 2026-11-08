@@ -1,0 +1,216 @@
+#!/bin/bash
+# tests/mocks/herdr — deterministic Herdr mock for the agent-army test suites.
+#
+# Behaviour is controlled by two environment variables:
+#   HERDR_MOCK_DIR  state directory for call logs, panes, agents, and scripts.
+#   HERDR_MOCK_REPO physical CWD reported by `workspace list` (for
+#                   find_workspace_by_cwd's strict physical match).
+#
+# Every recognized invocation is appended to $HERDR_MOCK_DIR/calls.log in
+# execution order. Simulated workers commit owned files and write completion
+# anchors synchronously inside `agent prompt`, so supervisors observe them on
+# their first poll. Per-task worker behaviour is scripted by writing one of
+# commit-owned (default) | no-commit | blocked-auth | silent into
+# $HERDR_MOCK_DIR/worker-mode/<task_id>. The verifier verdict is read from
+# $HERDR_MOCK_DIR/verifier-verdict (default PASS; %TASK% expands to the id).
+# Agent status overrides live in $HERDR_MOCK_DIR/status/<agent_name>.
+set -uo pipefail
+
+MD="${HERDR_MOCK_DIR:-}"
+
+# Strip a global --workspace <id> flag if present.
+while [ "${1:-}" = "--workspace" ]; do
+  shift 2
+done
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+
+_log() {
+  if [ -n "$MD" ]; then
+    printf '%s\n' "$*" >> "$MD/calls.log"
+  fi
+}
+
+_mock_run_agent() {
+  local target="$1"
+  local text="$2"
+  [ -n "$MD" ] || return 0
+  local pane wt
+  pane="$(cat "$MD/agent-pane-$target" 2>/dev/null || true)"
+  wt="$(cat "$MD/pane-cwd-$pane" 2>/dev/null || true)"
+  [ -n "$wt" ] || return 0
+  case "$target" in
+    verifier-*)
+      local task=""
+      task="$(printf '%s' "$text" | sed -nE 's/.*briefs\/[0-9]+-(.+)-verify\.xml.*/\1/p')"
+      [ -n "$task" ] || return 0
+      if [ "$(cat "$MD/verifier-mode" 2>/dev/null || echo active)" = "silent" ]; then
+        return 0
+      fi
+      local verdict
+      verdict="$(cat "$MD/verifier-verdict" 2>/dev/null || echo 'VERIFIER PASS #%TASK% mock-sha')"
+      mkdir -p "$wt/.agent-army/anchors"
+      printf '%s\n' "${verdict/\%TASK\%/$task}" > "$wt/.agent-army/anchors/$task.verify.txt"
+      ;;
+    *)
+      local task=""
+      task="$(printf '%s' "$text" | sed -nE 's/.*briefs\/[0-9]+-(.+)\.xml.*/\1/p')"
+      [ -n "$task" ] || return 0
+      local mode
+      mode="$(cat "$MD/worker-mode/$task" 2>/dev/null || echo commit-owned)"
+      mkdir -p "$wt/.agent-army/anchors"
+      if [ "$mode" = "silent" ]; then
+        return 0
+      fi
+      case "$mode" in
+        commit-owned)
+          local brief owns_file
+          brief="$(ls "$wt/.agent-army/briefs/"[0-9]*-"$task.xml" 2>/dev/null | head -n 1 || true)"
+          owns_file=""
+          if [ -n "$brief" ]; then
+            owns_file="$(sed -nE 's:.*<owns>(.*)</owns>.*:\1:p' "$brief" | head -n 1 | cut -d, -f1 | tr -d '[:space:]')"
+          fi
+          [ -n "$owns_file" ] || owns_file="mock-file.txt"
+          mkdir -p "$wt/$(dirname "$owns_file")"
+          echo "mock work $task" >> "$wt/$owns_file"
+          git -C "$wt" add -- "$owns_file" >/dev/null 2>&1
+          git -C "$wt" commit -q -m "mock: $task" >/dev/null 2>&1
+          printf 'WORKER DONE #%s %s\n' "$task" "$(git -C "$wt" rev-parse HEAD)"
+          ;;
+        no-commit)
+          printf 'WORKER DONE #%s %s\n' "$task" "$(git -C "$wt" rev-parse HEAD)"
+          ;;
+        blocked-auth)
+          printf 'WORKER BLOCKED #%s AUTH gh login required\n' "$task"
+          ;;
+        silent)
+          :
+          ;;
+      esac > "$wt/.agent-army/anchors/$task.txt"
+      ;;
+  esac
+}
+
+case "$cmd" in
+  workspace)
+    if [ "${1:-}" = "list" ]; then
+      printf '[{"id":"ws-mock","cwd":"%s"}]\n' "${HERDR_MOCK_REPO:-/nonexistent}"
+      exit 0
+    fi
+    ;;
+  pane)
+    sub="${1:-}"
+    [ $# -gt 0 ] && shift
+    case "$sub" in
+      list)
+        printf '['
+        first=1
+        if [ -n "$MD" ]; then
+          for f in "$MD"/pane-cwd-*; do
+            [ -f "$f" ] || continue
+            pane="${f##*/pane-cwd-}"
+            [ $first -eq 0 ] && printf ','
+            printf '{"id":"%s","workspace_id":"ws-mock","cwd":"%s"}' "$pane" "$(cat "$f")"
+            first=0
+          done
+        fi
+        printf ']\n'
+        ;;
+      split)
+        cwd=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --cwd) cwd="$2"; shift 2 ;;
+            --no-focus) shift ;;
+            *) shift ;;
+          esac
+        done
+        if [ -n "$MD" ]; then
+          n="$(cat "$MD/pane-counter" 2>/dev/null || printf '0')"
+          n=$((n + 1))
+          printf '%s' "$n" > "$MD/pane-counter"
+          pane="ws-mock:p$n"
+          printf '%s' "$cwd" > "$MD/pane-cwd-$pane"
+          _log "pane split --cwd $cwd --no-focus -> $pane"
+          printf '%s\n' "$pane"
+        fi
+        ;;
+      close)
+        _log "pane close ${1:-}"
+        ;;
+      run)
+        _log "pane run ${1:-} ${2:-}"
+        ;;
+    esac
+    ;;
+  agent)
+    sub="${1:-}"
+    [ $# -gt 0 ] && shift
+    case "$sub" in
+      list)
+        printf '['
+        first=1
+        if [ -n "$MD" ]; then
+          for f in "$MD"/agent-name-*; do
+            [ -f "$f" ] || continue
+            name="$(cat "$f")"
+            pane="$(cat "$MD/agent-pane-$name" 2>/dev/null || printf '')"
+            [ $first -eq 0 ] && printf ','
+            printf '{"name":"%s","pane_id":"%s"}' "$name" "$pane"
+            first=0
+          done
+        fi
+        printf ']\n'
+        ;;
+      start)
+        name="${1:-}"
+        [ $# -gt 0 ] && shift
+        kind=""
+        pane=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --kind) kind="$2"; shift 2 ;;
+            --pane) pane="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -n "$MD" ]; then
+          printf '%s' "$name" > "$MD/agent-name-$name"
+          printf '%s' "$pane" > "$MD/agent-pane-$name"
+          printf '%s' "$name" > "$MD/pane-agent-$pane"
+          mkdir -p "$MD/env"
+          env > "$MD/env/$(printf '%s' "$name" | tr '/:' '__').env"
+          _log "agent start $name --kind $kind --pane $pane"
+        fi
+        ;;
+      get)
+        name="${1:-}"
+        status="idle"
+        if [ -n "$MD" ] && [ -f "$MD/status/$name" ]; then
+          status="$(cat "$MD/status/$name")"
+        fi
+        pane=""
+        [ -n "$MD" ] && pane="$(cat "$MD/agent-pane-$name" 2>/dev/null || printf '')"
+        printf '{"name":"%s","pane_id":"%s","agent_status":"%s"}\n' "$name" "$pane" "$status"
+        ;;
+      read)
+        name="${1:-}"
+        if [ -n "$MD" ] && [ -f "$MD/read/$name" ]; then
+          cat "$MD/read/$name"
+        fi
+        ;;
+      prompt)
+        target="${1:-}"
+        [ $# -gt 0 ] && shift
+        text="$*"
+        _log "agent prompt $target :: $text"
+        _mock_run_agent "$target" "$text"
+        ;;
+      send-keys)
+        _log "agent send-keys ${1:-} ${2:-}"
+        ;;
+    esac
+    ;;
+esac
+exit 0
