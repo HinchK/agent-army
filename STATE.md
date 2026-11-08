@@ -41,7 +41,7 @@
 
 ## 3. Immediate Next Step
 
-- Runtime validation against a live Herdr workspace + real `pi`/`opencode`
-  harness (the offline mocks cover the contracts; pane-id parsing and
-  agent-list heuristics are unproven live), then a first real mission via
-  `army setup` → `army run`.
+- Run the canary in [docs/superpowers/plans/2026-11-08-canary-mission.md](docs/superpowers/plans/2026-11-08-canary-mission.md).
+  The product code stays as merged. The run is a new one-test repo, one wave,
+  one worker, one verifier, `pi` as Commander. `pi` auth for Anthropic and
+  Google is not configured yet; that is the first step in the plan.
