@@ -1,7 +1,7 @@
 # Agent-Army State Checkpoint (`STATE.md`)
 
 **Updated:** 2026-11-08  
-**Phase:** Implementation + Branch Reviews Complete — `feat/agent-army` reviewed (3 review cycles) and fix-rounded through `946ff94`; ready to merge to `main`  
+**Phase:** Merged — `feat/agent-army` landed on `main` at `ff69189` after three review cycles; implementation complete, deferred test gap closed  
 **Design Spec:** [docs/superpowers/specs/2026-11-07-agent-army-design.md](docs/superpowers/specs/2026-11-07-agent-army-design.md)  
 **Implementation Plan:** [docs/superpowers/plans/2026-11-07-agent-army.md](docs/superpowers/plans/2026-11-07-agent-army.md)
 
@@ -26,22 +26,22 @@
 
 ## 2. Open Items / Unresolved Blockers
 
-- None from the implementation plan. All six tasks are implemented and tested
-  (`tests/` suites + `tests/test_commander_loop.py`, mocks in `tests/mocks/`).
-- Deferred minor from Task 1 review: add a timeout assertion for
-  `clean_gate_exec` in `tests/test_config_profile.sh`.
+- None from the implementation plan. All six tasks are implemented, tested,
+  and merged to `main` (`tests/` suites + `tests/test_commander_loop.py`,
+  mocks in `tests/mocks/`; 8 bash suites + 13 python tests green,
+  0 ShellCheck warnings).
+- Deferred minor from the Task 1 review (timeout assertion for
+  `clean_gate_exec`) — resolved: `tests/test_config_profile.sh` Test 4b
+  proves a hung command is killed at the deadline (exit 124).
+- Eight review-minor polish items remain deliberately deferred in the SDD
+  ledger rulings (pane-fallback anchor staleness, wave-number reuse,
+  multi-word TOML truncation, and others) — none block operation.
 
 ---
 
 ## 3. Immediate Next Step
 
-- Merge `feat/agent-army` to `main` (branch review complete: full review
-  2852f6c..8583c6a, verified fix re-review through d8c2637, and a final
-  independent whole-branch review fa83678..462e32d whose three Important
-  findings — fail-open secret scan on a missing integration ref,
-  preflight/promote parity on untracked `army.config.toml`/`mission.md`,
-  and transient verifier-dispatch failure losing GREEN work — are fixed
-  with RED→GREEN tests at `946ff94`; `make check` green: 8 bash suites +
-  13 python tests, 0 ShellCheck warnings). Runtime validation against a
-  live Herdr workspace + real `pi`/`opencode` harness is the first
-  post-merge activity.
+- Runtime validation against a live Herdr workspace + real `pi`/`opencode`
+  harness (the offline mocks cover the contracts; pane-id parsing and
+  agent-list heuristics are unproven live), then a first real mission via
+  `army setup` → `army run`.

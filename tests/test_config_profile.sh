@@ -125,6 +125,23 @@ FOO_TOOL="bar_val" HERDR_PANE_ID="w1:p1" HERDR_ENV="1" REPO_DIR="/bad/repo" STAT
   clean_gate_exec "$REPO1" "$PROFILE_FILE" 10 \
   'test "$CI" = "true" && test -z "${HERDR_PANE_ID:-}" && test -z "${HERDR_ENV:-}" && test -z "${REPO_DIR:-}" && test -z "${STATE_DIR:-}" && test "${FOO_TOOL:-}" = "bar_val" && test "${INLINE_TOOL:-}" = "inline_val" && test -d "${TMPDIR:-}"'
 
+echo "=== Test 4b: clean_gate_exec enforces its timeout (killed command fails fast with 124) ==="
+# Deferred minor from the Task 1 review: prove the gate actually terminates a
+# hung TEST_CMD at the deadline instead of waiting it out. GNU timeout,
+# gtimeout, and the Python fallback all exit 124 on expiry.
+TIMEOUT_T0="$(date +%s)"
+TIMEOUT_RC=0
+clean_gate_exec "$REPO1" "$PROFILE_FILE" 2 'sleep 30' >/dev/null 2>&1 || TIMEOUT_RC=$?
+TIMEOUT_ELAPSED=$(( $(date +%s) - TIMEOUT_T0 ))
+if [ "$TIMEOUT_RC" -ne 124 ]; then
+  echo "FAIL: timed-out gate must exit 124, got $TIMEOUT_RC" >&2
+  exit 1
+fi
+if [ "$TIMEOUT_ELAPSED" -ge 10 ]; then
+  echo "FAIL: gate must kill the command at the deadline (elapsed ${TIMEOUT_ELAPSED}s)" >&2
+  exit 1
+fi
+
 echo "=== Test 5: config_dump exports expected variables ==="
 ARMY_NAME=""
 ARMY_BASE_BRANCH=""
