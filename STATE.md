@@ -1,7 +1,7 @@
 # Agent-Army State Checkpoint (`STATE.md`)
 
 **Updated:** 2026-11-08  
-**Phase:** Implementation Complete — Tasks 1–6 landed on `feat/agent-army`; `make check` green  
+**Phase:** Implementation + Branch Review Complete — `feat/agent-army` reviewed and fix-rounded; ready to merge to `main`  
 **Design Spec:** [docs/superpowers/specs/2026-11-07-agent-army-design.md](docs/superpowers/specs/2026-11-07-agent-army-design.md)  
 **Implementation Plan:** [docs/superpowers/plans/2026-11-07-agent-army.md](docs/superpowers/plans/2026-11-07-agent-army.md)
 
@@ -35,6 +35,7 @@
 
 ## 3. Immediate Next Step
 
-- Review the `feat/agent-army` branch; merge to `main` when ready. Runtime
-  validation against a live Herdr workspace + real `pi`/`opencode` harness is
-  the first post-merge activity.
+- Merge `feat/agent-army` to `main` (branch review complete: full review
+  2852f6c..8583c6a plus a verified fix re-review through d8c2637; make check
+  green). Runtime validation against a live Herdr workspace + real
+  `pi`/`opencode` harness is the first post-merge activity.
