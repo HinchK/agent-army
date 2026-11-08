@@ -35,7 +35,7 @@ if ! declare -f arbiter_enqueue >/dev/null 2>&1; then
     touch "$queue"
     local ts
     ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    jq -n \
+    jq -nc \
       --arg ts "$ts" \
       --arg t "$task_id" \
       --arg s "$seat" \
