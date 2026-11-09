@@ -1,0 +1,3 @@
+# The ledger, the gate, and the operator hold trust
+
+The origin brief called the lead "truth-keeping," and the design spec still says the Commander "holds mission truth." The Commander only plans. The ledger — git, plus the mission's durable files — is what a later session trusts. The gate is the only judgment that can mark a change passed. The operator alone crosses a security boundary. Putting that trust in the model's context was the alternative, and it loses: a conversation is not an auditable record, a check the author can influence gets gamed, and authorization has to sit where the model cannot bypass it.
