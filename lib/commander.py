@@ -526,6 +526,40 @@ def _task_to_dict(task: TaskSpec) -> Dict[str, Any]:
     }
 
 
+def _repo_snapshot(repo_dir: Path, limit: int = 8000) -> str:
+    """Tracked text at HEAD, capped so the Commander can see unmet criteria.
+
+    git log alone does not show whether a mission's exit criteria hold. A
+    model with no file bodies will invent a completed change.
+    """
+    try:
+        names = [line for line in _git(repo_dir, "ls-files").splitlines() if line]
+    except subprocess.CalledProcessError:
+        return "(unavailable)"
+    parts: List[str] = []
+    used = 0
+    for rel in names:
+        if rel.startswith(".agent-army/") or rel == "army.config.toml":
+            continue
+        path = repo_dir / rel
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if b"\0" in data:
+            piece = f"### {rel}\n(binary)\n"
+        else:
+            text = data.decode("utf-8", errors="replace")
+            if len(text) > 2000:
+                text = text[:2000] + "\n…\n"
+            piece = f"### {rel}\n```\n{text}\n```\n"
+        if used + len(piece) > limit:
+            parts.append("(snapshot truncated)\n")
+            break
+        parts.append(piece)
+        used += len(piece)
+    return "".join(parts) if parts else "(no tracked files)"
+
+
 def _build_commander_prompt(
     repo_dir: Path,
     cfg: Dict[str, Any],
@@ -548,6 +582,7 @@ def _build_commander_prompt(
     except subprocess.CalledProcessError:
         log = "(unavailable)"
     sections.append("## Repository Status\n\n```\n" + log + "\n```\n")
+    sections.append("## Tree at HEAD\n\n" + _repo_snapshot(repo_dir) + "\n")
     sections.append(
         "## Seats\n\n- worker seats: "
         + ", ".join(_worker_seats(repo_dir))

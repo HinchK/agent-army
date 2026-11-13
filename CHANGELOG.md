@@ -48,6 +48,8 @@ First release. `army version` prints `1.0.0`.
   written before `herdr agent start` returns is not treated as stale.
 - `mission_complete` on an unchanged `main` with nothing promoted is refused.
   A second such declaration stops the mission as `UNCHANGED_MAIN`.
+- The commander prompt includes the tracked tree at `HEAD`, so a completion
+  decision is made from the files rather than from `git log` alone.
 
 ### Compatibility
 

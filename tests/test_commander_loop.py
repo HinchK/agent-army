@@ -164,6 +164,18 @@ COMPLETE = """<commander_decision action="mission_complete">
 
 
 class TestCommanderUnit(CommanderHarness):
+    def test_commander_prompt_shows_tracked_file_bodies(self):
+        greet = self.repo / "lib" / "greet.sh"
+        greet.parent.mkdir()
+        greet.write_text("greet() { printf 'hello\\n'; }\n")
+        _run(["git", "add", "lib/greet.sh"], cwd=self.repo)
+        _run(["git", "commit", "-qm", "greet"], cwd=self.repo)
+        prompt = commander._build_commander_prompt(
+            self.repo, {}, {"status": "running"}, self.mission
+        )
+        self.assertIn("### lib/greet.sh", prompt)
+        self.assertIn("printf 'hello\\n'", prompt)
+
     def test_commander_invocation_flags_no_shell(self):
         cfg = {
             "commander_harness": "pi",
