@@ -44,16 +44,23 @@ providers_start_fresh_session() {
   local kind="$4"
   local model="${5:-}"
 
-  local slug
+  local slug held="" held_pane=""
   slug="$(state_read_slug "$repo_dir")"
   local agent="${seat}-${slug}"
 
-  # Live herdr keeps the name after the first start. Clear it, then leave the
-  # TUI so the pane is a shell again. `exit` is not used: that closes the shell.
-  herdr agent rename "$agent" --clear >/dev/null 2>&1 || true
-  herdr agent send-keys "$pane_id" ctrl+c >/dev/null 2>&1 || true
-  if [ -z "${HERDR_MOCK_DIR:-}" ]; then
-    sleep 1
+  # A fresh pane is already a shell. ctrl+c there races shell startup and
+  # herdr then reports agent_pane_busy. Only when this same pane already
+  # holds the named agent do we clear the name and return that TUI to a
+  # prompt. `exit` is not used.
+  if held="$(herdr agent get "$agent" 2>/dev/null)" && [ -n "$held" ]; then
+    held_pane="$(printf '%s' "$held" | herdr_agent_pane_json)"
+    herdr agent rename "$agent" --clear >/dev/null 2>&1 || true
+    if [ -n "$held_pane" ] && [ "$held_pane" = "$pane_id" ]; then
+      herdr agent send-keys "$pane_id" ctrl+c >/dev/null 2>&1 || true
+      if [ -z "${HERDR_MOCK_DIR:-}" ]; then
+        sleep 1
+      fi
+    fi
   fi
 
   # shellcheck disable=SC2046

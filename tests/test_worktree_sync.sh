@@ -170,10 +170,12 @@ source "$ROOT_DIR/lib/lifecycle.sh"
 source "$ROOT_DIR/lib/briefs.sh"
 
 echo "=== Test 4b: agent status is read from the live envelope and the flat mock ==="
-NESTED="$(printf '%s' '{"id":"cli:agent:get","result":{"agent":{"agent_status":"idle"}}}' | herdr_agent_status_json)"
-FLAT="$(printf '%s' '{"agent_status":"blocked"}' | herdr_agent_status_json)"
-if [ "$NESTED" != "idle" ] || [ "$FLAT" != "blocked" ]; then
-  echo "FAIL: agent status parsed nested='$NESTED' flat='$FLAT'" >&2
+NESTED="$(printf '%s' '{"id":"cli:agent:get","result":{"agent":{"agent_status":"idle","pane_id":"w28:p8"}}}' | herdr_agent_status_json)"
+FLAT="$(printf '%s' '{"agent_status":"blocked","pane_id":"ws-mock:p1"}' | herdr_agent_status_json)"
+NESTED_PANE="$(printf '%s' '{"id":"cli:agent:get","result":{"agent":{"agent_status":"idle","pane_id":"w28:p8"}}}' | herdr_agent_pane_json)"
+FLAT_PANE="$(printf '%s' '{"agent_status":"blocked","pane_id":"ws-mock:p1"}' | herdr_agent_pane_json)"
+if [ "$NESTED" != "idle" ] || [ "$FLAT" != "blocked" ] || [ "$NESTED_PANE" != "w28:p8" ] || [ "$FLAT_PANE" != "ws-mock:p1" ]; then
+  echo "FAIL: agent payload parsed nested='$NESTED' flat='$FLAT' panes='$NESTED_PANE'/'$FLAT_PANE'" >&2
   exit 1
 fi
 
