@@ -52,6 +52,8 @@ First release. `army version` prints `1.0.0`.
   decision is made from the files rather than from `git log` alone.
 - A task's `forbidden` text is not scanned as a plan to cross a security
   boundary. "Do not change .env" is not a `SECRET` halt.
+- A later dispatch keeps a verifier verdict that is already newer than its
+  prompt marker, instead of deleting it and waiting again.
 
 ### Compatibility
 

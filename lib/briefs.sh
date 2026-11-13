@@ -33,6 +33,26 @@ _briefs_anchor_has_verdict() {
   grep -qE '^[[:space:]]*(WORKER DONE|WORKER BLOCKED|VERIFIER PASS|VERIFIER FAIL) #[A-Za-z0-9_-]+' "$anchor"
 }
 
+# _briefs_keep_fresh_verdict <anchor> <marker>
+# A later dispatch must not delete a protocol line written after this
+# attempt's marker. That deletion is what dropped the canary's PASS.
+_briefs_keep_fresh_verdict() {
+  local anchor="$1"
+  local marker="$2"
+  _briefs_anchor_has_verdict "$anchor" || return 1
+  [ -f "$marker" ] || return 1
+  resolve_python
+  "$PYTHON_BIN" - "$anchor" "$marker" <<'PY'
+import os, sys
+try:
+    anchor_mtime = os.stat(sys.argv[1]).st_mtime
+    prompt_ts = float(open(sys.argv[2]).read().split()[0])
+except (OSError, IndexError, ValueError):
+    sys.exit(1)
+sys.exit(0 if anchor_mtime >= prompt_ts else 1)
+PY
+}
+
 # _briefs_valid_task_id <id>
 # Mirrors commander.py's _TASK_ID_RE: 1-64 chars of [A-Za-z0-9_-] starting
 # with an alphanumeric. Ids are interpolated into anchor/brief paths, so a
@@ -86,6 +106,9 @@ briefs_dispatch_task() {
   local briefs_dir="$worktree_dir/.agent-army/briefs"
   mkdir -p "$anchors_dir" "$briefs_dir"
 
+  if _briefs_keep_fresh_verdict "$anchors_dir/${task_id}.txt" "$anchors_dir/${task_id}.prompt_ts"; then
+    return 0
+  fi
   rm -f "$anchors_dir/${task_id}.txt"
   printf '%s\n' "$task_id" > "$worktree_dir/.agent-army/.active_task"
   cp "$xml_src" "$briefs_dir/${wave}-${task_id}.xml"
@@ -142,6 +165,9 @@ briefs_dispatch_verifier() {
   local briefs_dir="$worktree_dir/.agent-army/briefs"
   mkdir -p "$anchors_dir" "$briefs_dir"
 
+  if _briefs_keep_fresh_verdict "$anchors_dir/${task_id}.verify.txt" "$anchors_dir/${task_id}.verify.prompt_ts"; then
+    return 0
+  fi
   rm -f "$anchors_dir/${task_id}.verify.txt"
   printf '%s\n' "$task_id" > "$worktree_dir/.agent-army/.active_task"
   cp "$verify_xml_src" "$briefs_dir/${wave}-${task_id}-verify.xml"

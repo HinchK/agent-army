@@ -438,6 +438,17 @@ if [ "$FRESH_GOT" != "$FRESH_LINE" ]; then
   exit 1
 fi
 
+echo "=== Test 10c: a fresh verifier verdict survives another dispatch ==="
+printf '%s\n' '1.0 nonce' > "$VER_WT/.agent-army/anchors/W1-T1.verify.prompt_ts"
+printf '%s\n' 'VERIFIER PASS #W1-T1 deadbeef' > "$VER_WT/.agent-army/anchors/W1-T1.verify.txt"
+touch "$VER_WT/.agent-army/anchors/W1-T1.verify.txt"
+briefs_dispatch_verifier "$SEAT_REPO" "1" "W1-T1" "$SEAT_REPO/.agent-army/briefs/src-W1-T1-verify.xml"
+KEPT="$(cat "$VER_WT/.agent-army/anchors/W1-T1.verify.txt" 2>/dev/null || true)"
+if [ "$KEPT" != "VERIFIER PASS #W1-T1 deadbeef" ]; then
+  echo "FAIL: a fresh verifier verdict was replaced: '$KEPT'" >&2
+  exit 1
+fi
+
 echo "=== Test 11: swarm_down closes recorded panes and snapshots dirty worktrees ==="
 echo "dirty worktree" >> "$WORKTREE_W1/README.md"
 PANE_IDS="$(jq -r '.seats | to_entries[] | .value.pane_id' "$SEAT_REPO/.agent-army/seats.json")"
