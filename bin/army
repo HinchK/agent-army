@@ -16,7 +16,7 @@ Usage:
   army run    <repo_dir> --mission <file> [--commander pi|opencode] [--model <model>]
   army resume <repo_dir>                 Resume a MISSION_BLOCKED mission after human action
   army score  <repo_dir>                 Read-only Stampede session scorer (.herdr-swarm)
-  army version                            Print the release version
+  army version                           Print the release version
   army arbiter {init-ref|enqueue|drain|promote} <args...>
 
 Exit codes: 0 mission complete; 1 error; 20 MISSION_BLOCKED (handoff.md written).

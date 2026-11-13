@@ -115,6 +115,12 @@ action, and the `army resume` command) and exit `20`.
 Exit codes: `0` mission complete, `1` error, `20` `MISSION_BLOCKED`
 (handoff written).
 
+## Release
+
+`army version` prints the contents of [`VERSION`](VERSION). History is in
+[`CHANGELOG.md`](CHANGELOG.md). The steps for cutting a tag are in
+[`docs/releasing.md`](docs/releasing.md).
+
 ## Development
 
 ```bash
