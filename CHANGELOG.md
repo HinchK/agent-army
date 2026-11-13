@@ -31,6 +31,11 @@ First release. `army version` prints `1.0.0`.
   report `degraded` when a ledger cannot be parsed.
 - Exit codes: `0` complete, `1` error, `20` blocked.
 
+### Fixed
+
+- Seat startup passes `--direction` to `herdr pane split` and reads the new
+  pane id from `.result.pane.pane_id`.
+
 ### Compatibility
 
 These stay compatible until 2.0.0: the commands and flags in `army --help`,

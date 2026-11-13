@@ -169,6 +169,13 @@ source "$ROOT_DIR/lib/lifecycle.sh"
 # shellcheck source=lib/briefs.sh disable=SC1091
 source "$ROOT_DIR/lib/briefs.sh"
 
+echo "=== Test 4c: pane split JSON uses result.pane.pane_id, not the envelope id ==="
+PARSED="$(_parse_pane_id '{"id":"cli:pane:split","result":{"pane":{"pane_id":"w28:p2"},"type":"pane_info"}}')"
+if [ "$PARSED" != "w28:p2" ]; then
+  echo "FAIL: parsed '$PARSED' from pane split JSON" >&2
+  exit 1
+fi
+
 MOCK_BIN="$TMP_ROOT/mockbin"
 mkdir -p "$MOCK_BIN"
 ln -sf "$ROOT_DIR/tests/mocks/herdr" "$MOCK_BIN/herdr"
@@ -220,7 +227,7 @@ if [ -z "$FIRST_SPLIT_LINE" ] || [ -z "$FIRST_START_LINE" ] || [ "$FIRST_SPLIT_L
   exit 1
 fi
 while IFS= read -r split_line; do
-  split_cwd="$(printf '%s' "$split_line" | sed -nE 's/pane split --cwd (.+) --no-focus.*/\1/p')"
+  split_cwd="$(printf '%s' "$split_line" | sed -nE 's/pane split --cwd ([^ ]+) --direction (right|down) --no-focus.*/\1/p')"
   case "$split_cwd" in
     */.agent-army/worktrees/*) ;;
     *)

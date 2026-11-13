@@ -119,20 +119,29 @@ case "$cmd" in
         ;;
       split)
         cwd=""
+        direction=""
         while [ $# -gt 0 ]; do
           case "$1" in
             --cwd) cwd="$2"; shift 2 ;;
-            --no-focus) shift ;;
+            --direction) direction="$2"; shift 2 ;;
+            --no-focus|--current|--focus) shift ;;
             *) shift ;;
           esac
         done
+        case "$direction" in
+          right|down) ;;
+          *)
+            echo "usage: herdr pane split --direction right|down" >&2
+            exit 2
+            ;;
+        esac
         if [ -n "$MD" ]; then
           n="$(cat "$MD/pane-counter" 2>/dev/null || printf '0')"
           n=$((n + 1))
           printf '%s' "$n" > "$MD/pane-counter"
           pane="ws-mock:p$n"
           printf '%s' "$cwd" > "$MD/pane-cwd-$pane"
-          _log "pane split --cwd $cwd --no-focus -> $pane"
+          _log "pane split --cwd $cwd --direction $direction --no-focus -> $pane"
           printf '%s\n' "$pane"
         fi
         ;;
