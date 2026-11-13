@@ -592,6 +592,8 @@ def _wake_commander(
     proc = subprocess.run(
         cmd, cwd=str(repo_dir), env=cmd_env, capture_output=True, text=True, timeout=timeout
     )
+    (state_dir / "commander-last.stdout").write_text(proc.stdout or "")
+    (state_dir / "commander-last.stderr").write_text(proc.stderr or "")
     return parse_decision_xml(proc.stdout)
 
 
@@ -962,6 +964,7 @@ def run_mission(
     config_path: Path,
     overrides: Optional[Dict[str, Any]] = None,
     env: Optional[Dict[str, str]] = None,
+    allow_unchanged_complete: bool = False,
 ) -> int:
     repo_dir = repo_dir.resolve()
     state_dir = repo_dir / ".agent-army"
@@ -991,6 +994,9 @@ def run_mission(
 
         max_waves = int(cfg.get("army_max_waves", 15) or 15)
         accounting_pending = False
+        start_sha = _git(repo_dir, "rev-parse", "HEAD")
+        false_complete = 0
+        wake_extra = ""
 
         while True:
             # 1. Drain & promote the settled queue BEFORE any Commander wake.
@@ -1029,7 +1035,11 @@ def run_mission(
                 _save_state(state_dir, state)
 
             if not tasks:
-                decision = _wake_commander(repo_dir, cfg, state, mission_file, env=env)
+                _update_mission_state(repo_dir, state)
+                decision = _wake_commander(
+                    repo_dir, cfg, state, mission_file, extra_context=wake_extra, env=env
+                )
+                wake_extra = ""
                 if decision.action == "mission_blocked":
                     write_handoff(
                         repo_dir,
@@ -1041,6 +1051,33 @@ def run_mission(
                     _save_state(state_dir, state)
                     return EXIT_MISSION_BLOCKED
                 if decision.action == "mission_complete":
+                    head = _git(repo_dir, "rev-parse", "HEAD")
+                    promoted = any(
+                        row.get("status") == "promoted" for row in _queue_rows(repo_dir)
+                    )
+                    if (
+                        not allow_unchanged_complete
+                        and head == start_sha
+                        and not promoted
+                    ):
+                        false_complete += 1
+                        if false_complete >= 2:
+                            write_handoff(
+                                repo_dir,
+                                "UNCHANGED_MAIN",
+                                "commander declared mission_complete but local main "
+                                f"is still {head} and nothing was promoted",
+                                "Dispatch the remaining work, or advance main yourself, "
+                                "then army resume.",
+                                state,
+                            )
+                            _save_state(state_dir, state)
+                            return EXIT_MISSION_BLOCKED
+                        wake_extra = (
+                            f"local main is still {head} and nothing has been promoted. "
+                            "The mission is not complete. Dispatch the work."
+                        )
+                        continue
                     return _finish_mission(repo_dir, cfg, state, mission_file, env)
                 tasks = decision.tasks
 
@@ -1113,7 +1150,9 @@ def resume_mission(repo_dir: Path, config_path: Path) -> int:
     if not mission_file or not Path(mission_file).exists():
         print(f"error: state has no resolvable mission_file: {mission_file!r}", file=sys.stderr)
         return EXIT_ERROR
-    return run_mission(repo_dir, Path(mission_file), config_path)
+    return run_mission(
+        repo_dir, Path(mission_file), config_path, allow_unchanged_complete=True
+    )
 
 
 def main(argv: Optional[List[str]] = None) -> int:

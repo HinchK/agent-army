@@ -481,6 +481,22 @@ class TestCommanderLoop(CommanderHarness):
         self.assertTrue(handoff.exists())
         self.assertIn("CONFLICT_RESOLUTION_INVALID", handoff.read_text())
 
+    def test_unchanged_main_is_not_mission_complete(self):
+        state_dir = self.repo / ".agent-army"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "MISSION_STATE.md").write_text(
+            "# Mission State\n\n- status: complete\n- waves supervised: 0\n"
+        )
+        self.set_decisions(COMPLETE, COMPLETE)
+        self.run_mission(expect_rc=20)
+        self.assertFalse((state_dir / "COMPLETE.md").exists())
+        handoff = (state_dir / "handoff.md").read_text()
+        self.assertIn("UNCHANGED_MAIN", handoff)
+        prompt = (state_dir / "commander-prompt.md").read_text()
+        self.assertNotIn("- status: complete", prompt)
+        self.assertIn("- status: running", prompt)
+        self.assertEqual(self.pi_calls(), 2)
+
     def test_zero_integrate_waves_halts_at_two(self):
         no_commit_wave = """<commander_decision action="dispatch_wave">
   <summary>Failing wave.</summary>
