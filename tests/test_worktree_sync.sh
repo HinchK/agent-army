@@ -236,6 +236,10 @@ while IFS= read -r split_line; do
       ;;
   esac
 done < <(grep 'pane split' "$CALLS")
+if grep -q 'pane run .* exit' "$CALLS"; then
+  echo "FAIL: fresh seat start closed the shell with exit" >&2
+  exit 1
+fi
 
 echo "=== Test 6: worker/verifier launches are credential-free ==="
 for seat in worker_1 worker_2 verifier; do

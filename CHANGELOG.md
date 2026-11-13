@@ -35,6 +35,8 @@ First release. `army version` prints `1.0.0`.
 
 - Seat startup passes `--direction` to `herdr pane split` and reads the new
   pane id from `.result.pane.pane_id`.
+- A fresh seat leaves the new pane's shell running so `herdr agent start`
+  can find an interactive prompt.
 
 ### Compatibility
 
