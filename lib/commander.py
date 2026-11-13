@@ -244,9 +244,13 @@ _BOUNDARY_PATTERNS: List[Tuple[str, str]] = [
 
 
 def scan_task_security_boundaries(task: TaskSpec) -> Optional[Tuple[str, str]]:
-    """Returns (boundary, evidence) when a task asks a worker to cross one."""
+    """Returns (boundary, evidence) when a task asks a worker to cross one.
+
+    The forbidden field is a prohibition, not a plan. Scanning it turns
+    "do not touch .env" into a SECRET block.
+    """
     text = " ".join(
-        [task.objective, " ".join(task.read), " ".join(task.owns), task.forbidden, task.done_criteria]
+        [task.objective, " ".join(task.read), " ".join(task.owns), task.done_criteria]
     ).lower()
     for boundary, pattern in _BOUNDARY_PATTERNS:
         match = re.search(pattern, text)

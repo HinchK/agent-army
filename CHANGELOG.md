@@ -50,6 +50,8 @@ First release. `army version` prints `1.0.0`.
   A second such declaration stops the mission as `UNCHANGED_MAIN`.
 - The commander prompt includes the tracked tree at `HEAD`, so a completion
   decision is made from the files rather than from `git log` alone.
+- A task's `forbidden` text is not scanned as a plan to cross a security
+  boundary. "Do not change .env" is not a `SECRET` halt.
 
 ### Compatibility
 

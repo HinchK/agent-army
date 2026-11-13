@@ -319,6 +319,13 @@ class TestCommanderUnit(CommanderHarness):
         self.assertEqual(commander.scan_task_security_boundaries(task)[0], "DEPLOY")
         task = commander.TaskSpec(id="T", objective="add tests for auth", owns=["tests/x.py"])
         self.assertIsNone(commander.scan_task_security_boundaries(task))
+        task = commander.TaskSpec(
+            id="T",
+            objective="Teach greet to take a name",
+            owns=["lib/greet.sh"],
+            forbidden="Do not change .env or secrets",
+        )
+        self.assertIsNone(commander.scan_task_security_boundaries(task))
 
     def test_exclusive_fcntl_army_lock(self):
         state_dir = self.repo / ".agent-army"
