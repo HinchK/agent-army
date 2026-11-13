@@ -22,6 +22,9 @@ sys.path.insert(0, str(ROOT))
 
 _spec = importlib.util.spec_from_file_location("commander", ROOT / "lib" / "commander.py")
 commander = importlib.util.module_from_spec(_spec)
+# dataclasses on 3.11/3.12 look up the class module in sys.modules while
+# the class body is still executing. Register first or the import crashes.
+sys.modules["commander"] = commander
 _spec.loader.exec_module(commander)  # type: ignore[union-attr]
 
 
