@@ -15,6 +15,13 @@ from typing import Any
 
 DEFINITION = "verified integrated tickets per measured token"
 
+COUNTED_STATUSES = ("integrated", "promoted")
+
+NUMERATOR_FILTER = (
+    "session-verdicts suite green with exit_code 0 and "
+    f"integration status in {COUNTED_STATUSES} on the same ticket and sha"
+)
+
 PROXY_MISSING = {
     "prompt_bytes": ["prompt byte length"],
     "gates_per_ticket": [
@@ -25,6 +32,27 @@ PROXY_MISSING = {
     "dispatches_per_integration": ["integration cycle id"],
     "wall_clock_per_ticket": ["active versus idle marker"],
 }
+
+
+def _parse_concatenated(text: str) -> list[dict[str, Any]] | None:
+    """Parse concatenated JSON objects; None when the text is not all objects."""
+    decoder = json.JSONDecoder()
+    rows: list[dict[str, Any]] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        while index < length and text[index].isspace():
+            index += 1
+        if index >= length:
+            break
+        try:
+            value, index = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(value, dict):
+            return None
+        rows.append(value)
+    return rows
 
 
 def _load_jsonl(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -46,6 +74,13 @@ def _load_jsonl(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]
                 rows.append(parsed)
             else:
                 errors.append({"file": path.name, "line": number, "error": "row is not an object"})
+    if errors:
+        # The file may hold concatenated pretty-printed objects instead of
+        # one object per line. Re-parse whole-file; replace the partial
+        # line-based rows so fragments are never mixed with whole objects.
+        fallback = _parse_concatenated(path.read_text(encoding="utf-8"))
+        if fallback is not None:
+            return fallback, []
     return rows, errors
 
 
@@ -116,7 +151,7 @@ def _verified_tickets(
                 green.setdefault(ticket, set()).add(sha)
     seen: set[str] = set()
     for row in integration:
-        if row.get("status") != "integrated":
+        if row.get("status") not in COUNTED_STATUSES:
             continue
         ticket = str(row.get("ticket") or "")
         sha = str(row.get("sha") or "")
@@ -190,6 +225,10 @@ def score_repo(repo_dir: Path) -> dict[str, Any]:
     looper_rows, looper_errors = _load_jsonl(looper_path)
     errors.extend(verdict_errors + integration_errors + looper_errors)
 
+    # Parse failures carry a "line" key; a missing traces dir does not.
+    parse_failures = [error for error in errors if "line" in error]
+    degraded = bool(parse_failures)
+
     trace_sessions, _trace_absent = _session_ids(events)
     verdict_sessions, verdict_absent = _session_ids(verdicts)
     integration_sessions, integration_absent = _session_ids(integration)
@@ -208,6 +247,8 @@ def score_repo(repo_dir: Path) -> dict[str, Any]:
         missing.append("session_id on session-verdicts.jsonl")
     if not (state / "integration.jsonl").is_file() or integration_absent:
         missing.append("session_id on integration.jsonl")
+    for name in sorted({error["file"] for error in parse_failures}):
+        missing.append(f"unparsed rows in {name}")
     missing.append("measured token count for worker seats")
     if not looper_path.is_file():
         missing.append("looper-usage.jsonl")
@@ -230,6 +271,7 @@ def score_repo(repo_dir: Path) -> dict[str, Any]:
     token: dict[str, Any] = {
         "definition": DEFINITION,
         "numerator": _verified_tickets(verdicts, integration),
+        "numerator_filter": NUMERATOR_FILTER,
         "numerator_scope": (
             "session" if same else "ledger ticket and sha match, not session-scoped"
         ),
@@ -251,6 +293,7 @@ def score_repo(repo_dir: Path) -> dict[str, Any]:
     return {
         "same_session": same,
         "session_scored": same,
+        "degraded": degraded,
         "join": {
             "trace_sessions": trace_sessions,
             "verdict_sessions": verdict_sessions,
