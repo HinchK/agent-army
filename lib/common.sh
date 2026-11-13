@@ -17,6 +17,19 @@ log_error() {
   printf '[army:error] %s\n' "$*" >&2
 }
 
+# herdr_agent_status_json
+# Reads one `herdr agent get` payload on stdin. Live herdr wraps the agent
+# under .result.agent; the test mock prints agent_status at the top level.
+herdr_agent_status_json() {
+  jq -r '.result.agent.agent_status // .agent_status // ""' 2>/dev/null || true
+}
+
+# herdr_agent_pane_json
+# Reads one `herdr agent get` payload on stdin and prints the pane id.
+herdr_agent_pane_json() {
+  jq -r '.result.agent.pane_id // .pane_id // ""' 2>/dev/null || true
+}
+
 slugify() {
   local raw="${1:-}"
   local slug

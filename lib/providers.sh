@@ -33,8 +33,10 @@ providers_prepare_seat() {
 }
 
 # providers_start_fresh_session <repo_dir> <seat> <pane_id> <kind> <model>
-# Interrupts any active agent process on the pane, then starts a new
-# credential-free agent session named <seat>-<slug> on the existing pane.
+# Clears any previous registration of <seat>-<slug>, returns the pane to its
+# shell, and starts a new credential-free session. herdr agent start requires
+# an interactive prompt and rejects a name that is already taken. `exit` is
+# not used: that closes the shell.
 providers_start_fresh_session() {
   local repo_dir="$1"
   local seat="$2"
@@ -42,12 +44,24 @@ providers_start_fresh_session() {
   local kind="$4"
   local model="${5:-}"
 
-  local slug
+  local slug held="" held_pane=""
   slug="$(state_read_slug "$repo_dir")"
   local agent="${seat}-${slug}"
 
-  herdr agent send-keys "$pane_id" ctrl+c >/dev/null 2>&1 || true
-  herdr pane run "$pane_id" "exit" >/dev/null 2>&1 || true
+  # A fresh pane is already a shell. ctrl+c there races shell startup and
+  # herdr then reports agent_pane_busy. Only when this same pane already
+  # holds the named agent do we clear the name and return that TUI to a
+  # prompt. `exit` is not used.
+  if held="$(herdr agent get "$agent" 2>/dev/null)" && [ -n "$held" ]; then
+    held_pane="$(printf '%s' "$held" | herdr_agent_pane_json)"
+    herdr agent rename "$agent" --clear >/dev/null 2>&1 || true
+    if [ -n "$held_pane" ] && [ "$held_pane" = "$pane_id" ]; then
+      herdr agent send-keys "$pane_id" ctrl+c >/dev/null 2>&1 || true
+      if [ -z "${HERDR_MOCK_DIR:-}" ]; then
+        sleep 1
+      fi
+    fi
+  fi
 
   # shellcheck disable=SC2046
   $(credential_free_env_prefix) herdr agent start "$agent" --kind "$kind" --pane "$pane_id"

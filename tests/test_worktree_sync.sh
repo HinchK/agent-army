@@ -169,6 +169,23 @@ source "$ROOT_DIR/lib/lifecycle.sh"
 # shellcheck source=lib/briefs.sh disable=SC1091
 source "$ROOT_DIR/lib/briefs.sh"
 
+echo "=== Test 4b: agent status is read from the live envelope and the flat mock ==="
+NESTED="$(printf '%s' '{"id":"cli:agent:get","result":{"agent":{"agent_status":"idle","pane_id":"w28:p8"}}}' | herdr_agent_status_json)"
+FLAT="$(printf '%s' '{"agent_status":"blocked","pane_id":"ws-mock:p1"}' | herdr_agent_status_json)"
+NESTED_PANE="$(printf '%s' '{"id":"cli:agent:get","result":{"agent":{"agent_status":"idle","pane_id":"w28:p8"}}}' | herdr_agent_pane_json)"
+FLAT_PANE="$(printf '%s' '{"agent_status":"blocked","pane_id":"ws-mock:p1"}' | herdr_agent_pane_json)"
+if [ "$NESTED" != "idle" ] || [ "$FLAT" != "blocked" ] || [ "$NESTED_PANE" != "w28:p8" ] || [ "$FLAT_PANE" != "ws-mock:p1" ]; then
+  echo "FAIL: agent payload parsed nested='$NESTED' flat='$FLAT' panes='$NESTED_PANE'/'$FLAT_PANE'" >&2
+  exit 1
+fi
+
+echo "=== Test 4c: pane split JSON uses result.pane.pane_id, not the envelope id ==="
+PARSED="$(_parse_pane_id '{"id":"cli:pane:split","result":{"pane":{"pane_id":"w28:p2"},"type":"pane_info"}}')"
+if [ "$PARSED" != "w28:p2" ]; then
+  echo "FAIL: parsed '$PARSED' from pane split JSON" >&2
+  exit 1
+fi
+
 MOCK_BIN="$TMP_ROOT/mockbin"
 mkdir -p "$MOCK_BIN"
 ln -sf "$ROOT_DIR/tests/mocks/herdr" "$MOCK_BIN/herdr"
@@ -220,7 +237,7 @@ if [ -z "$FIRST_SPLIT_LINE" ] || [ -z "$FIRST_START_LINE" ] || [ "$FIRST_SPLIT_L
   exit 1
 fi
 while IFS= read -r split_line; do
-  split_cwd="$(printf '%s' "$split_line" | sed -nE 's/pane split --cwd (.+) --no-focus.*/\1/p')"
+  split_cwd="$(printf '%s' "$split_line" | sed -nE 's/pane split --cwd ([^ ]+) --direction (right|down) --no-focus.*/\1/p')"
   case "$split_cwd" in
     */.agent-army/worktrees/*) ;;
     *)
@@ -229,6 +246,33 @@ while IFS= read -r split_line; do
       ;;
   esac
 done < <(grep 'pane split' "$CALLS")
+if grep -q 'pane run .* exit' "$CALLS"; then
+  echo "FAIL: fresh seat start closed the shell with exit" >&2
+  exit 1
+fi
+if ! grep -q 'agent rename worker_1-.* --clear' "$CALLS"; then
+  echo "FAIL: fresh start did not clear the previous agent name" >&2
+  exit 1
+fi
+
+echo "=== Test 5b: a second swarm_up keeps each seat on its own worktree ==="
+swarm_up "$SEAT_REPO" "$SEAT_REPO/army.config.toml"
+W1_WT="$(jq -r '.seats.worker_1.worktree_dir' "$SEAT_REPO/.agent-army/seats.json")"
+VER_WT="$(jq -r '.seats.verifier.worktree_dir' "$SEAT_REPO/.agent-army/seats.json")"
+case "$W1_WT" in
+  */worker_1) ;;
+  *)
+    echo "FAIL: worker_1 worktree is '$W1_WT'" >&2
+    exit 1
+    ;;
+esac
+case "$VER_WT" in
+  */verifier) ;;
+  *)
+    echo "FAIL: verifier worktree is '$VER_WT'" >&2
+    exit 1
+    ;;
+esac
 
 echo "=== Test 6: worker/verifier launches are credential-free ==="
 for seat in worker_1 worker_2 verifier; do

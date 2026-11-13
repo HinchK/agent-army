@@ -102,6 +102,7 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertFalse(report["same_session"])
         self.assertFalse(report["session_scored"])
+        self.assertFalse(report["degraded"])
         self.assertEqual(report["join"]["trace_sessions"], [SESSION])
         self.assertEqual(report["join"]["verdict_sessions"], [])
         self.assertEqual(report["join"]["integration_sessions"], [])
@@ -123,6 +124,60 @@ class ScoreTests(unittest.TestCase):
         ):
             self.assertFalse(report["proxies"][name]["supported"])
             self.assertNotIn("value", report["proxies"][name])
+
+    def test_pretty_printed_ledger_rows_are_counted(self):
+        _fixture(self.tmp)
+        state = self.tmp / ".herdr-swarm"
+        rows = [
+            {
+                "ts": 1794216515,
+                "ticket": "ELIG-1",
+                "seat": "arch-1-stampede",
+                "sha": SHA,
+                "status": "integrated",
+                "merge_sha": SHA,
+            },
+            {
+                "ts": 1794217000,
+                "ticket": "ELIG-2",
+                "seat": "arch-1-stampede",
+                "sha": SHA,
+                "status": "promoted",
+                "merge_sha": SHA,
+            },
+        ]
+        text = "".join(json.dumps(row, indent=2) + "\n" for row in rows)
+        (state / "integration.jsonl").write_text(text)
+        report = self.score.score_repo(self.tmp)
+        self.assertEqual(report["counts"]["integration"], 2)
+        self.assertEqual(report["token_effectiveness"]["numerator"], 1)
+        self.assertEqual(report["errors"], [])
+        self.assertFalse(report["degraded"])
+
+    def test_promoted_rows_count_in_the_numerator(self):
+        _fixture(self.tmp)
+        state = self.tmp / ".herdr-swarm"
+        row = {
+            "ts": 1794216515,
+            "ticket": "ELIG-1",
+            "seat": "arch-1-stampede",
+            "sha": SHA,
+            "status": "promoted",
+            "merge_sha": SHA,
+        }
+        (state / "integration.jsonl").write_text(_jsonl([row]))
+        report = self.score.score_repo(self.tmp)
+        self.assertEqual(report["token_effectiveness"]["numerator"], 1)
+        self.assertIn("promoted", report["token_effectiveness"]["numerator_filter"])
+
+    def test_unparseable_ledger_marks_the_report_degraded(self):
+        _fixture(self.tmp)
+        state = self.tmp / ".herdr-swarm"
+        (state / "integration.jsonl").write_text('{"ts": 1,\n"broken\n')
+        report = self.score.score_repo(self.tmp)
+        self.assertTrue(report["degraded"])
+        self.assertIn("unparsed rows in integration.jsonl", report["missing_fields"])
+        self.assertEqual(report["counts"]["integration"], 0)
 
     def test_shared_session_id_joins(self):
         _fixture(self.tmp, session_on_ledgers=True)

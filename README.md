@@ -109,10 +109,17 @@ action, and the `army resume` command) and exit `20`.
 | `army run <repo> --mission f.md` | full mission loop (exclusive `army.lock`) |
 | `army resume <repo>` | fast-forward integration/pool to a human-advanced `main`, then run |
 | `army score <repo>` | read-only report of a Stampede `.herdr-swarm` (no drain, no promote) |
+| `army version` | print the release version from `VERSION` |
 | `army arbiter {init-ref\|enqueue\|drain\|promote}` | direct arbiter primitives |
 
 Exit codes: `0` mission complete, `1` error, `20` `MISSION_BLOCKED`
 (handoff written).
+
+## Release
+
+`army version` prints the contents of [`VERSION`](VERSION). History is in
+[`CHANGELOG.md`](CHANGELOG.md). The steps for cutting a tag are in
+[`docs/releasing.md`](docs/releasing.md).
 
 ## Development
 

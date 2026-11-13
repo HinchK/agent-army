@@ -15,7 +15,12 @@ source "$_LIFECYCLE_DIR/providers.sh"
 
 _parse_pane_id() {
   local out="${1:-}"
-  local cand
+  local cand=""
+  if printf '%s' "$out" | jq -e '.result.pane.pane_id' >/dev/null 2>&1; then
+    cand="$(printf '%s' "$out" | jq -r '.result.pane.pane_id')"
+    printf '%s' "$cand"
+    return 0
+  fi
   cand="$(printf '%s\n' "$out" | grep -oE '[A-Za-z0-9_-]+:[A-Za-z0-9_-]+' | head -n 1 || true)"
   if [ -z "$cand" ]; then
     cand="$(printf '%s\n' "$out" | tail -n 1 | tr -d '[:space:]')"
@@ -25,7 +30,8 @@ _parse_pane_id() {
 
 # swarm_up <repo_dir> <config_path>
 # Seats the standing pool: exclude -> provision worktrees -> pane split with
-# --cwd <worktree> --no-focus -> credential-free agent start -> seats.json.
+# --cwd <worktree> --direction right --no-focus -> credential-free agent start
+# -> seats.json.
 # Reuses existing seat records whose agents still respond. Never creates an
 # ops pane.
 swarm_up() {
@@ -71,12 +77,16 @@ swarm_up() {
     [ "$critical" = "true" ] || critical=false
 
     local agent="${seat}-${slug}"
-    local pane_id wt branch
+    # local is function-scoped, so a previous seat's worktree must be cleared
+    # or a reused seat records the prior seat's path.
+    local pane_id=""
+    local wt=""
+    local branch=""
 
     local existing_pane=""
     existing_pane="$(jq -r --arg s "$seat" '.seats[$s].pane_id // ""' "$seats_file" 2>/dev/null || true)"
     if [ -n "$existing_pane" ] && herdr agent get "$agent" >/dev/null 2>&1 \
-      && [ "$(herdr agent get "$agent" 2>/dev/null | jq -r '.agent_status // ""' 2>/dev/null || true)" != "" ]; then
+      && [ "$(herdr agent get "$agent" 2>/dev/null | herdr_agent_status_json)" != "" ]; then
       pane_id="$existing_pane"
     else
       if [ "$worktree_flag" != "false" ]; then
@@ -89,10 +99,10 @@ swarm_up() {
 
       local split_out=""
       if [ -n "$ws_id" ]; then
-        split_out="$(herdr --workspace "$ws_id" pane split --cwd "$wt" --no-focus 2>/dev/null || true)"
+        split_out="$(herdr --workspace "$ws_id" pane split --cwd "$wt" --direction right --no-focus 2>/dev/null || true)"
       fi
       if [ -z "$split_out" ]; then
-        split_out="$(herdr pane split --cwd "$wt" --no-focus)"
+        split_out="$(herdr pane split --cwd "$wt" --direction right --no-focus)"
       fi
       pane_id="$(_parse_pane_id "$split_out")"
       if [ -z "$pane_id" ]; then
