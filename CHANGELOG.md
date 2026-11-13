@@ -39,6 +39,10 @@ First release. `army version` prints `1.0.0`.
   can find an interactive prompt.
 - Seat reuse and the AUTH check read `agent_status` from the live herdr
   envelope.
+- A fresh task session clears the previous herdr agent name before starting
+  again, so the second start is not rejected as `agent_name_taken`.
+- Re-seating one agent no longer copies the previous seat's worktree onto
+  the next seat.
 
 ### Compatibility
 

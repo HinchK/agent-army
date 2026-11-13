@@ -226,6 +226,9 @@ case "$cmd" in
       send-keys)
         _log "agent send-keys ${1:-} ${2:-}"
         ;;
+      rename)
+        _log "agent rename ${1:-} ${2:-}"
+        ;;
     esac
     ;;
 esac

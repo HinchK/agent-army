@@ -248,6 +248,29 @@ if grep -q 'pane run .* exit' "$CALLS"; then
   echo "FAIL: fresh seat start closed the shell with exit" >&2
   exit 1
 fi
+if ! grep -q 'agent rename worker_1-.* --clear' "$CALLS"; then
+  echo "FAIL: fresh start did not clear the previous agent name" >&2
+  exit 1
+fi
+
+echo "=== Test 5b: a second swarm_up keeps each seat on its own worktree ==="
+swarm_up "$SEAT_REPO" "$SEAT_REPO/army.config.toml"
+W1_WT="$(jq -r '.seats.worker_1.worktree_dir' "$SEAT_REPO/.agent-army/seats.json")"
+VER_WT="$(jq -r '.seats.verifier.worktree_dir' "$SEAT_REPO/.agent-army/seats.json")"
+case "$W1_WT" in
+  */worker_1) ;;
+  *)
+    echo "FAIL: worker_1 worktree is '$W1_WT'" >&2
+    exit 1
+    ;;
+esac
+case "$VER_WT" in
+  */verifier) ;;
+  *)
+    echo "FAIL: verifier worktree is '$VER_WT'" >&2
+    exit 1
+    ;;
+esac
 
 echo "=== Test 6: worker/verifier launches are credential-free ==="
 for seat in worker_1 worker_2 verifier; do

@@ -33,9 +33,10 @@ providers_prepare_seat() {
 }
 
 # providers_start_fresh_session <repo_dir> <seat> <pane_id> <kind> <model>
-# Interrupts a running program on the pane, then starts a new credential-free
-# agent session named <seat>-<slug>. The pane's shell stays up: herdr agent
-# start requires an interactive prompt, and `exit` would close that shell.
+# Clears any previous registration of <seat>-<slug>, returns the pane to its
+# shell, and starts a new credential-free session. herdr agent start requires
+# an interactive prompt and rejects a name that is already taken. `exit` is
+# not used: that closes the shell.
 providers_start_fresh_session() {
   local repo_dir="$1"
   local seat="$2"
@@ -47,7 +48,13 @@ providers_start_fresh_session() {
   slug="$(state_read_slug "$repo_dir")"
   local agent="${seat}-${slug}"
 
+  # Live herdr keeps the name after the first start. Clear it, then leave the
+  # TUI so the pane is a shell again. `exit` is not used: that closes the shell.
+  herdr agent rename "$agent" --clear >/dev/null 2>&1 || true
   herdr agent send-keys "$pane_id" ctrl+c >/dev/null 2>&1 || true
+  if [ -z "${HERDR_MOCK_DIR:-}" ]; then
+    sleep 1
+  fi
 
   # shellcheck disable=SC2046
   $(credential_free_env_prefix) herdr agent start "$agent" --kind "$kind" --pane "$pane_id"

@@ -77,7 +77,11 @@ swarm_up() {
     [ "$critical" = "true" ] || critical=false
 
     local agent="${seat}-${slug}"
-    local pane_id wt branch
+    # local is function-scoped, so a previous seat's worktree must be cleared
+    # or a reused seat records the prior seat's path.
+    local pane_id=""
+    local wt=""
+    local branch=""
 
     local existing_pane=""
     existing_pane="$(jq -r --arg s "$seat" '.seats[$s].pane_id // ""' "$seats_file" 2>/dev/null || true)"
