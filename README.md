@@ -109,6 +109,7 @@ action, and the `army resume` command) and exit `20`.
 | `army run <repo> --mission f.md` | full mission loop (exclusive `army.lock`) |
 | `army resume <repo>` | fast-forward integration/pool to a human-advanced `main`, then run |
 | `army score <repo>` | read-only report of a Stampede `.herdr-swarm` (no drain, no promote) |
+| `army version` | print the release version from `VERSION` |
 | `army arbiter {init-ref\|enqueue\|drain\|promote}` | direct arbiter primitives |
 
 Exit codes: `0` mission complete, `1` error, `20` `MISSION_BLOCKED`
