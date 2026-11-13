@@ -37,6 +37,8 @@ First release. `army version` prints `1.0.0`.
   pane id from `.result.pane.pane_id`.
 - A fresh seat leaves the new pane's shell running so `herdr agent start`
   can find an interactive prompt.
+- Seat reuse and the AUTH check read `agent_status` from the live herdr
+  envelope.
 
 ### Compatibility
 

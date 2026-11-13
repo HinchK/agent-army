@@ -521,7 +521,7 @@ _supervisor_step_task() {
 
   # Herdr-reported AUTH boundary (trust dialogs, permission prompts).
   local astat
-  astat="$(herdr agent get "$agent" 2>/dev/null | jq -r '.agent_status // ""' 2>/dev/null || true)"
+  astat="$(herdr agent get "$agent" 2>/dev/null | herdr_agent_status_json)"
   if [ "$astat" = "blocked" ]; then
     _sup_terminal "$repo_dir" "$run_dir" "$task_id" "blocked" "AUTH" "herdr_agent_blocked"
     return 0

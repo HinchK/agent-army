@@ -82,7 +82,7 @@ swarm_up() {
     local existing_pane=""
     existing_pane="$(jq -r --arg s "$seat" '.seats[$s].pane_id // ""' "$seats_file" 2>/dev/null || true)"
     if [ -n "$existing_pane" ] && herdr agent get "$agent" >/dev/null 2>&1 \
-      && [ "$(herdr agent get "$agent" 2>/dev/null | jq -r '.agent_status // ""' 2>/dev/null || true)" != "" ]; then
+      && [ "$(herdr agent get "$agent" 2>/dev/null | herdr_agent_status_json)" != "" ]; then
       pane_id="$existing_pane"
     else
       if [ "$worktree_flag" != "false" ]; then
