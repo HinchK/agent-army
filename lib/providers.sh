@@ -63,8 +63,22 @@ providers_start_fresh_session() {
     fi
   fi
 
-  # shellcheck disable=SC2046
-  $(credential_free_env_prefix) herdr agent start "$agent" --kind "$kind" --pane "$pane_id"
+  _providers_agent_start() {
+    # shellcheck disable=SC2046
+    $(credential_free_env_prefix) herdr agent start "$agent" --kind "$kind" --pane "$pane_id"
+  }
+
+  if _providers_agent_start; then
+    return 0
+  fi
+  # Claude left on its session picker is not a shell, so start returns
+  # agent_pane_busy. Escape and ctrl+c return to the prompt; retry once.
+  herdr agent send-keys "$pane_id" escape >/dev/null 2>&1 || true
+  herdr agent send-keys "$pane_id" ctrl+c >/dev/null 2>&1 || true
+  if [ -z "${HERDR_MOCK_DIR:-}" ]; then
+    sleep 1
+  fi
+  _providers_agent_start
 }
 
 # providers_submit_prompt <pane_or_agent> <short_prompt>

@@ -164,6 +164,18 @@ COMPLETE = """<commander_decision action="mission_complete">
 
 
 class TestCommanderUnit(CommanderHarness):
+    def test_commander_prompt_shows_tracked_file_bodies(self):
+        greet = self.repo / "lib" / "greet.sh"
+        greet.parent.mkdir()
+        greet.write_text("greet() { printf 'hello\\n'; }\n")
+        _run(["git", "add", "lib/greet.sh"], cwd=self.repo)
+        _run(["git", "commit", "-qm", "greet"], cwd=self.repo)
+        prompt = commander._build_commander_prompt(
+            self.repo, {}, {"status": "running"}, self.mission
+        )
+        self.assertIn("### lib/greet.sh", prompt)
+        self.assertIn("printf 'hello\\n'", prompt)
+
     def test_commander_invocation_flags_no_shell(self):
         cfg = {
             "commander_harness": "pi",
@@ -306,6 +318,13 @@ class TestCommanderUnit(CommanderHarness):
         task = commander.TaskSpec(id="T", objective="deploy with vercel --prod", owns=["x"])
         self.assertEqual(commander.scan_task_security_boundaries(task)[0], "DEPLOY")
         task = commander.TaskSpec(id="T", objective="add tests for auth", owns=["tests/x.py"])
+        self.assertIsNone(commander.scan_task_security_boundaries(task))
+        task = commander.TaskSpec(
+            id="T",
+            objective="Teach greet to take a name",
+            owns=["lib/greet.sh"],
+            forbidden="Do not change .env or secrets",
+        )
         self.assertIsNone(commander.scan_task_security_boundaries(task))
 
     def test_exclusive_fcntl_army_lock(self):
@@ -480,6 +499,22 @@ class TestCommanderLoop(CommanderHarness):
         handoff = self.repo / ".agent-army" / "handoff.md"
         self.assertTrue(handoff.exists())
         self.assertIn("CONFLICT_RESOLUTION_INVALID", handoff.read_text())
+
+    def test_unchanged_main_is_not_mission_complete(self):
+        state_dir = self.repo / ".agent-army"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "MISSION_STATE.md").write_text(
+            "# Mission State\n\n- status: complete\n- waves supervised: 0\n"
+        )
+        self.set_decisions(COMPLETE, COMPLETE)
+        self.run_mission(expect_rc=20)
+        self.assertFalse((state_dir / "COMPLETE.md").exists())
+        handoff = (state_dir / "handoff.md").read_text()
+        self.assertIn("UNCHANGED_MAIN", handoff)
+        prompt = (state_dir / "commander-prompt.md").read_text()
+        self.assertNotIn("- status: complete", prompt)
+        self.assertIn("- status: running", prompt)
+        self.assertEqual(self.pi_calls(), 2)
 
     def test_zero_integrate_waves_halts_at_two(self):
         no_commit_wave = """<commander_decision action="dispatch_wave">

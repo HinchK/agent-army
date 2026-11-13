@@ -14,13 +14,43 @@ source "$_BRIEFS_DIR/providers.sh"
 # _briefs_write_prompt_marker <prompt_ts_file>
 # Records "<epoch-seconds.fraction> <nonce>". The nonce uniquifies each
 # attempt; the sub-second timestamp lets supervisor_read_anchor reject an
-# anchor written back within the same 1-second mtime tick. Written AFTER the
-# fresh agent session starts, so any anchor predating this attempt (the
-# previous agent is interrupted best-effort by providers_start_fresh_session)
-# is older than the marker.
+# anchor written back within the same 1-second mtime tick. Written immediately
+# BEFORE the fresh session starts. A live agent can write its verdict before
+# `herdr agent start` returns; a marker written after that return makes the
+# verdict look stale and the supervisor ignores it until timeout.
 _briefs_write_prompt_marker() {
   resolve_python
   "$PYTHON_BIN" -c 'import secrets, time; print("%.6f %s" % (time.time(), secrets.token_hex(4)))' > "$1"
+}
+
+# _briefs_anchor_has_verdict <anchor_file>
+# True when the file already holds a protocol verdict line. A start that
+# fails after the agent wrote that line must not be retried: the retry
+# deletes the anchor.
+_briefs_anchor_has_verdict() {
+  local anchor="$1"
+  [ -f "$anchor" ] || return 1
+  grep -qE '^[[:space:]]*(WORKER DONE|WORKER BLOCKED|VERIFIER PASS|VERIFIER FAIL) #[A-Za-z0-9_-]+' "$anchor"
+}
+
+# _briefs_keep_fresh_verdict <anchor> <marker>
+# A later dispatch must not delete a protocol line written after this
+# attempt's marker. That deletion is what dropped the canary's PASS.
+_briefs_keep_fresh_verdict() {
+  local anchor="$1"
+  local marker="$2"
+  _briefs_anchor_has_verdict "$anchor" || return 1
+  [ -f "$marker" ] || return 1
+  resolve_python
+  "$PYTHON_BIN" - "$anchor" "$marker" <<'PY'
+import os, sys
+try:
+    anchor_mtime = os.stat(sys.argv[1]).st_mtime
+    prompt_ts = float(open(sys.argv[2]).read().split()[0])
+except (OSError, IndexError, ValueError):
+    sys.exit(1)
+sys.exit(0 if anchor_mtime >= prompt_ts else 1)
+PY
 }
 
 # _briefs_valid_task_id <id>
@@ -42,8 +72,7 @@ _briefs_valid_task_id() {
 #   2. write .active_task
 #   3. copy the brief into <worktree>/.agent-army/briefs/<wave>-<task_id>.xml
 #   4. snapshot the pre-task worktree state (best effort, dirty only)
-#   5. start a fresh agent session on the existing pane (interrupts any
-#      previous attempt first), THEN record the nonce prompt marker
+#   5. record the nonce prompt marker, then start a fresh agent session
 #   6. herdr agent prompt <seat>-<slug> with a <200 byte file-path prompt
 #   7. sleep ARMY_SUBMIT_DELAY (default 1) && herdr agent send-keys <target> enter
 briefs_dispatch_task() {
@@ -89,12 +118,16 @@ briefs_dispatch_task() {
   # Explicit rc check: callers run this inside $( ) || rc=$? contexts where
   # set -e is suppressed, so a failed fresh-session start would otherwise be
   # silently skipped and the prompt delivered to the previous attempt's
-  # (stale) agent session.
+  # (stale) agent session. The marker is recorded first so a verdict written
+  # before start returns is still newer than this attempt.
+  _briefs_write_prompt_marker "$anchors_dir/${task_id}.prompt_ts"
   if ! providers_start_fresh_session "$repo_dir" "$seat" "$pane_id" "$kind" "$model"; then
+    if _briefs_anchor_has_verdict "$anchors_dir/${task_id}.txt"; then
+      return 0
+    fi
     log_error "briefs_dispatch_task: fresh agent session failed for $task_id on $seat"
     return 1
   fi
-  _briefs_write_prompt_marker "$anchors_dir/${task_id}.prompt_ts"
   providers_submit_prompt "${seat}-${slug}" "Read .agent-army/briefs/${wave}-${task_id}.xml, execute the task within scope, commit your work, and write the completion anchor file."
 }
 
@@ -129,19 +162,25 @@ briefs_dispatch_verifier() {
   local briefs_dir="$worktree_dir/.agent-army/briefs"
   mkdir -p "$anchors_dir" "$briefs_dir"
 
+  if _briefs_keep_fresh_verdict "$anchors_dir/${task_id}.verify.txt" "$anchors_dir/${task_id}.verify.prompt_ts"; then
+    return 0
+  fi
   rm -f "$anchors_dir/${task_id}.verify.txt"
   printf '%s\n' "$task_id" > "$worktree_dir/.agent-army/.active_task"
   cp "$verify_xml_src" "$briefs_dir/${wave}-${task_id}-verify.xml"
 
   providers_prepare_seat "$worktree_dir" "$kind" "$model"
-  # Same explicit rc check as briefs_dispatch_task: $( ) || rc=$? callers
-  # suppress set -e, and a skipped fresh-session start would hand the verify
-  # prompt to whatever agent ran before.
+  # Same explicit rc check as briefs_dispatch_task. Marker first, so a
+  # verdict written before start returns is not stale. A start that fails
+  # after that write is still success: the supervisor retry would delete it.
+  _briefs_write_prompt_marker "$anchors_dir/${task_id}.verify.prompt_ts"
   if ! providers_start_fresh_session "$repo_dir" "verifier" "$pane_id" "$kind" "$model"; then
+    if _briefs_anchor_has_verdict "$anchors_dir/${task_id}.verify.txt"; then
+      return 0
+    fi
     log_error "briefs_dispatch_verifier: fresh verifier session failed for $task_id"
     return 1
   fi
-  _briefs_write_prompt_marker "$anchors_dir/${task_id}.verify.prompt_ts"
   providers_submit_prompt "verifier-${slug}" "Read .agent-army/briefs/${wave}-${task_id}-verify.xml, audit the commit diff, and write the verifier anchor file."
 }
 

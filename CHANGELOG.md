@@ -44,6 +44,16 @@ First release. `army version` prints `1.0.0`.
   pane is left alone until its shell is ready.
 - Re-seating one agent no longer copies the previous seat's worktree onto
   the next seat.
+- The prompt marker is written before the agent session starts, so a verdict
+  written before `herdr agent start` returns is not treated as stale.
+- `mission_complete` on an unchanged `main` with nothing promoted is refused.
+  A second such declaration stops the mission as `UNCHANGED_MAIN`.
+- The commander prompt includes the tracked tree at `HEAD`, so a completion
+  decision is made from the files rather than from `git log` alone.
+- A task's `forbidden` text is not scanned as a plan to cross a security
+  boundary. "Do not change .env" is not a `SECRET` halt.
+- A later dispatch keeps a verifier verdict that is already newer than its
+  prompt marker, instead of deleting it and waiting again.
 
 ### Compatibility
 

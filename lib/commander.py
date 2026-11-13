@@ -244,9 +244,13 @@ _BOUNDARY_PATTERNS: List[Tuple[str, str]] = [
 
 
 def scan_task_security_boundaries(task: TaskSpec) -> Optional[Tuple[str, str]]:
-    """Returns (boundary, evidence) when a task asks a worker to cross one."""
+    """Returns (boundary, evidence) when a task asks a worker to cross one.
+
+    The forbidden field is a prohibition, not a plan. Scanning it turns
+    "do not touch .env" into a SECRET block.
+    """
     text = " ".join(
-        [task.objective, " ".join(task.read), " ".join(task.owns), task.forbidden, task.done_criteria]
+        [task.objective, " ".join(task.read), " ".join(task.owns), task.done_criteria]
     ).lower()
     for boundary, pattern in _BOUNDARY_PATTERNS:
         match = re.search(pattern, text)
@@ -526,6 +530,40 @@ def _task_to_dict(task: TaskSpec) -> Dict[str, Any]:
     }
 
 
+def _repo_snapshot(repo_dir: Path, limit: int = 8000) -> str:
+    """Tracked text at HEAD, capped so the Commander can see unmet criteria.
+
+    git log alone does not show whether a mission's exit criteria hold. A
+    model with no file bodies will invent a completed change.
+    """
+    try:
+        names = [line for line in _git(repo_dir, "ls-files").splitlines() if line]
+    except subprocess.CalledProcessError:
+        return "(unavailable)"
+    parts: List[str] = []
+    used = 0
+    for rel in names:
+        if rel.startswith(".agent-army/") or rel == "army.config.toml":
+            continue
+        path = repo_dir / rel
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if b"\0" in data:
+            piece = f"### {rel}\n(binary)\n"
+        else:
+            text = data.decode("utf-8", errors="replace")
+            if len(text) > 2000:
+                text = text[:2000] + "\n…\n"
+            piece = f"### {rel}\n```\n{text}\n```\n"
+        if used + len(piece) > limit:
+            parts.append("(snapshot truncated)\n")
+            break
+        parts.append(piece)
+        used += len(piece)
+    return "".join(parts) if parts else "(no tracked files)"
+
+
 def _build_commander_prompt(
     repo_dir: Path,
     cfg: Dict[str, Any],
@@ -548,6 +586,7 @@ def _build_commander_prompt(
     except subprocess.CalledProcessError:
         log = "(unavailable)"
     sections.append("## Repository Status\n\n```\n" + log + "\n```\n")
+    sections.append("## Tree at HEAD\n\n" + _repo_snapshot(repo_dir) + "\n")
     sections.append(
         "## Seats\n\n- worker seats: "
         + ", ".join(_worker_seats(repo_dir))
@@ -592,6 +631,8 @@ def _wake_commander(
     proc = subprocess.run(
         cmd, cwd=str(repo_dir), env=cmd_env, capture_output=True, text=True, timeout=timeout
     )
+    (state_dir / "commander-last.stdout").write_text(proc.stdout or "")
+    (state_dir / "commander-last.stderr").write_text(proc.stderr or "")
     return parse_decision_xml(proc.stdout)
 
 
@@ -962,6 +1003,7 @@ def run_mission(
     config_path: Path,
     overrides: Optional[Dict[str, Any]] = None,
     env: Optional[Dict[str, str]] = None,
+    allow_unchanged_complete: bool = False,
 ) -> int:
     repo_dir = repo_dir.resolve()
     state_dir = repo_dir / ".agent-army"
@@ -991,6 +1033,9 @@ def run_mission(
 
         max_waves = int(cfg.get("army_max_waves", 15) or 15)
         accounting_pending = False
+        start_sha = _git(repo_dir, "rev-parse", "HEAD")
+        false_complete = 0
+        wake_extra = ""
 
         while True:
             # 1. Drain & promote the settled queue BEFORE any Commander wake.
@@ -1029,7 +1074,11 @@ def run_mission(
                 _save_state(state_dir, state)
 
             if not tasks:
-                decision = _wake_commander(repo_dir, cfg, state, mission_file, env=env)
+                _update_mission_state(repo_dir, state)
+                decision = _wake_commander(
+                    repo_dir, cfg, state, mission_file, extra_context=wake_extra, env=env
+                )
+                wake_extra = ""
                 if decision.action == "mission_blocked":
                     write_handoff(
                         repo_dir,
@@ -1041,6 +1090,33 @@ def run_mission(
                     _save_state(state_dir, state)
                     return EXIT_MISSION_BLOCKED
                 if decision.action == "mission_complete":
+                    head = _git(repo_dir, "rev-parse", "HEAD")
+                    promoted = any(
+                        row.get("status") == "promoted" for row in _queue_rows(repo_dir)
+                    )
+                    if (
+                        not allow_unchanged_complete
+                        and head == start_sha
+                        and not promoted
+                    ):
+                        false_complete += 1
+                        if false_complete >= 2:
+                            write_handoff(
+                                repo_dir,
+                                "UNCHANGED_MAIN",
+                                "commander declared mission_complete but local main "
+                                f"is still {head} and nothing was promoted",
+                                "Dispatch the remaining work, or advance main yourself, "
+                                "then army resume.",
+                                state,
+                            )
+                            _save_state(state_dir, state)
+                            return EXIT_MISSION_BLOCKED
+                        wake_extra = (
+                            f"local main is still {head} and nothing has been promoted. "
+                            "The mission is not complete. Dispatch the work."
+                        )
+                        continue
                     return _finish_mission(repo_dir, cfg, state, mission_file, env)
                 tasks = decision.tasks
 
@@ -1113,7 +1189,9 @@ def resume_mission(repo_dir: Path, config_path: Path) -> int:
     if not mission_file or not Path(mission_file).exists():
         print(f"error: state has no resolvable mission_file: {mission_file!r}", file=sys.stderr)
         return EXIT_ERROR
-    return run_mission(repo_dir, Path(mission_file), config_path)
+    return run_mission(
+        repo_dir, Path(mission_file), config_path, allow_unchanged_complete=True
+    )
 
 
 def main(argv: Optional[List[str]] = None) -> int:
