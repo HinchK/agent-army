@@ -198,6 +198,16 @@ case "$cmd" in
           mkdir -p "$MD/env"
           env > "$MD/env/$(printf '%s' "$name" | tr '/:' '__').env"
           _log "agent start $name --kind $kind --pane $pane"
+          # A live agent can write its anchor before `agent start` returns.
+          # "$MD/anchor-on-start" is "<path>|<line>".
+          if [ -f "$MD/anchor-on-start" ]; then
+            spec="$(cat "$MD/anchor-on-start")"
+            apath="${spec%%|*}"
+            aline="${spec#*|}"
+            sleep 0.05
+            mkdir -p "$(dirname "$apath")"
+            printf '%s\n' "$aline" > "$apath"
+          fi
         fi
         ;;
       get)

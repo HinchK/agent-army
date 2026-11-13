@@ -422,6 +422,22 @@ case "${LAST_VPROMPT#* :: }" in
     ;;
 esac
 
+echo "=== Test 10b: an anchor written during agent start stays readable ==="
+# shellcheck source=lib/supervisor.sh disable=SC1091
+source "$ROOT_DIR/lib/supervisor.sh"
+# Silent prompt: the only anchor is the one written before agent start returns.
+printf 'silent\n' > "$MOCK_DIR/verifier-mode"
+FRESH_LINE="VERIFIER PASS #W1-T1 deadbeef"
+printf '%s|%s\n' "$VER_WT/.agent-army/anchors/W1-T1.verify.txt" "$FRESH_LINE" > "$MOCK_DIR/anchor-on-start"
+briefs_dispatch_verifier "$SEAT_REPO" "1" "W1-T1" "$SEAT_REPO/.agent-army/briefs/src-W1-T1-verify.xml"
+rm -f "$MOCK_DIR/anchor-on-start"
+FRESH_GOT="$(supervisor_read_anchor "$VER_WT" ".agent-army/anchors/W1-T1.verify.txt" "$VER_WT/.agent-army/anchors/W1-T1.verify.prompt_ts" "verifier-$SEAT_SLUG" || true)"
+printf 'active\n' > "$MOCK_DIR/verifier-mode"
+if [ "$FRESH_GOT" != "$FRESH_LINE" ]; then
+  echo "FAIL: anchor written during agent start was not readable: '$FRESH_GOT'" >&2
+  exit 1
+fi
+
 echo "=== Test 11: swarm_down closes recorded panes and snapshots dirty worktrees ==="
 echo "dirty worktree" >> "$WORKTREE_W1/README.md"
 PANE_IDS="$(jq -r '.seats | to_entries[] | .value.pane_id' "$SEAT_REPO/.agent-army/seats.json")"
