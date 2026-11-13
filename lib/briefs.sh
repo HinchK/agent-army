@@ -106,9 +106,6 @@ briefs_dispatch_task() {
   local briefs_dir="$worktree_dir/.agent-army/briefs"
   mkdir -p "$anchors_dir" "$briefs_dir"
 
-  if _briefs_keep_fresh_verdict "$anchors_dir/${task_id}.txt" "$anchors_dir/${task_id}.prompt_ts"; then
-    return 0
-  fi
   rm -f "$anchors_dir/${task_id}.txt"
   printf '%s\n' "$task_id" > "$worktree_dir/.agent-army/.active_task"
   cp "$xml_src" "$briefs_dir/${wave}-${task_id}.xml"
