@@ -5,6 +5,17 @@ All notable changes to Agent Army are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-11-25
+
+Maintenance release. `army version` prints `1.0.1`. The `army` runtime is
+unchanged from 1.0.0.
+
+### Changed
+
+- The `check` workflow uses `actions/checkout@v7` and `actions/setup-python@v7`,
+  which run on Node 24. The previous `checkout@v4` and `setup-python@v5` ran on
+  Node 20, which GitHub Actions is retiring.
+
 ## [1.0.0] - 2026-11-13
 
 First release. `army version` prints `1.0.0`.
@@ -61,4 +72,5 @@ These stay compatible until 2.0.0: the commands and flags in `army --help`,
 the exit codes above, the keys in `army.config.toml.example`, the handoff
 path `.agent-army/handoff.md`, and the safety invariants in `CLAUDE.md`.
 
+[1.0.1]: https://github.com/HinchK/agent-army/releases/tag/v1.0.1
 [1.0.0]: https://github.com/HinchK/agent-army/releases/tag/v1.0.0
