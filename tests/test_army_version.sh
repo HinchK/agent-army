@@ -4,12 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
-echo "=== Test 1: army version prints 1.0.0 ==="
+echo "=== Test 1: army version prints 1.0.1 ==="
 if ! got="$("$ROOT_DIR/bin/army" version)"; then
   echo "FAIL: army version exited nonzero" >&2
   exit 1
 fi
-if [ "$got" != "1.0.0" ]; then
+if [ "$got" != "1.0.1" ]; then
   echo "FAIL: army version printed '$got'" >&2
   exit 1
 fi
